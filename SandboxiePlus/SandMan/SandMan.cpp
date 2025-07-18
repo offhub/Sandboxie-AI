@@ -4013,14 +4013,15 @@ SB_STATUS CSandMan::AddAsyncOp(const CSbieProgressPtr& pProgress, bool bWait, co
 	connect(pProgress.data(), SIGNAL(Progress(int)), this, SLOT(OnAsyncProgress(int)));
 	connect(pProgress.data(), SIGNAL(Finished()), this, SLOT(OnAsyncFinished()));
 
-	m_pProgressDialog->OnStatusMessage(InitialMsg);
-	if (bWait) {
-		m_pProgressModal = true;
-		m_pProgressDialog->exec(); // safe exec breaks the closing
-		m_pProgressModal = false;
+	QString DisplayMsg = InitialMsg;
+	if (m_pAsyncProgress.size() > 1) {
+		DisplayMsg += QString(" (%1 operations running)").arg(m_pAsyncProgress.size());
 	}
-	else
-		SafeShow(m_pProgressDialog);
+	m_pProgressDialog->OnStatusMessage(DisplayMsg);
+	
+	// Always use non-blocking approach to keep GUI responsive
+	// The bWait parameter is kept for backward compatibility but operation is always non-blocking
+	SafeShow(m_pProgressDialog);
 
 	if (pProgress->IsFinished()) // Note: since the operation runs asynchronously, it may have already finished, so we need to test for that
 		OnAsyncFinished(pProgress.data());
@@ -4047,17 +4048,19 @@ void CSandMan::OnAsyncFinished(CSbieProgress* pSender)
 	if(Status.IsError())
 		CheckResults(QList<SB_STATUS>() << Status, Pair.second.data());
 
+	// Always hide progress dialog when all operations are complete
 	if (m_pAsyncProgress.isEmpty()) {
-		if(m_pProgressModal)
-			m_pProgressDialog->close();
-		else
-			m_pProgressDialog->hide();
+		m_pProgressDialog->hide();
 	}
 }
 
 void CSandMan::OnAsyncMessage(const QString& Text)
 {
-	m_pProgressDialog->OnStatusMessage(Text);
+	QString DisplayText = Text;
+	if (m_pAsyncProgress.size() > 1) {
+		DisplayText += QString(" (%1 operations running)").arg(m_pAsyncProgress.size());
+	}
+	m_pProgressDialog->OnStatusMessage(DisplayText);
 }
 
 void CSandMan::OnAsyncProgress(int Progress)
