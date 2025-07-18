@@ -13,6 +13,9 @@ public:
 		// Make dialog non-modal and more user-friendly
 		setWindowFlags(Qt::Tool | Qt::WindowStaysOnTopHint);
 		setModal(false); // Ensure dialog is non-modal to keep GUI responsive
+		
+		// Allow the dialog to be minimized and resized for better UX during long operations
+		setWindowFlags(windowFlags() | Qt::WindowMinimizeButtonHint);
 
 		//m_pMainWidget = new QWidget();
 		m_pMainLayout = new QGridLayout(this);

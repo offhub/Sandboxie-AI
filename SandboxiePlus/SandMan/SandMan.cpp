@@ -4017,6 +4017,14 @@ SB_STATUS CSandMan::AddAsyncOp(const CSbieProgressPtr& pProgress, bool bWait, co
 	if (m_pAsyncProgress.size() > 1) {
 		DisplayMsg += QString(" (%1 operations running)").arg(m_pAsyncProgress.size());
 	}
+	
+	// Set a descriptive window title for the progress dialog
+	if (m_pAsyncProgress.size() == 1) {
+		m_pProgressDialog->setWindowTitle(tr("Sandboxie-Plus - Operation Progress"));
+	} else {
+		m_pProgressDialog->setWindowTitle(tr("Sandboxie-Plus - %1 Operations").arg(m_pAsyncProgress.size()));
+	}
+	
 	m_pProgressDialog->OnStatusMessage(DisplayMsg);
 	
 	// Always use non-blocking approach to keep GUI responsive
@@ -4050,6 +4058,7 @@ void CSandMan::OnAsyncFinished(CSbieProgress* pSender)
 
 	// Always hide progress dialog when all operations are complete
 	if (m_pAsyncProgress.isEmpty()) {
+		m_pProgressDialog->setWindowTitle(tr("Sandboxie-Plus"));
 		m_pProgressDialog->hide();
 	}
 }
