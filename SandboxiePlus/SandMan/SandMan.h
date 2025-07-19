@@ -467,7 +467,6 @@ private:
 	bool				m_bExit;
 
 	CProgressDialog*	m_pProgressDialog;
-	bool				m_pProgressModal;
 	CPopUpWindow*		m_pPopUpWindow;
 
 	bool				m_StartMenuUpdatePending;
