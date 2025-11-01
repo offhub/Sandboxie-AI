@@ -41,6 +41,7 @@ public:
 	virtual ~CSandBox();
 
 	virtual void					UpdateDetails();
+	virtual SB_PROGRESS				UpdateDetailsAsync();
 
 	virtual void					SetBoxPaths(const QString& FilePath, const QString& RegPath, const QString& IpcPath);
 	virtual void					SetFileRoot(const QString& FilePath);
@@ -85,6 +86,10 @@ public:
 	virtual SB_STATUS				ImBoxMount(const QString& Password = QString(), bool bProtect = false, bool bAutoUnmount = false);
 	virtual SB_STATUS				ImBoxUnmount();
 
+	// Async versions to prevent UI blocking
+	virtual SB_PROGRESS				ImBoxMountAsync(const QString& Password = QString(), bool bProtect = false, bool bAutoUnmount = false);
+	virtual SB_PROGRESS				ImBoxUnmountAsync();
+
 	virtual bool					IsPortable() const { return !m_PortablePath.isEmpty(); }
 
 	virtual SB_STATUS				RenameSection(const QString& NewName, bool deleteOld = true);
@@ -106,6 +111,9 @@ protected:
 
 	static void						DeleteSnapshotAsync(const CSbieProgressPtr& pProgress, const QString& BoxPath, const QString& ID);
 	static void						MergeSnapshotAsync(const CSbieProgressPtr& pProgress, const QString& BoxPath, const QString& TargetID, const QString& SourceID, const QPair<const QString, class CSbieAPI*>& params);
+
+	// Worker functions for async box operations
+	static void						UpdateDetailsAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox);
 
 	QString							m_FilePath;
 	QString							m_FileRePath; // reparsed Nt path

@@ -18,6 +18,7 @@
 #include "stdafx.h"
 #include <QDebug>
 #include <QStandardPaths>
+#include <QtConcurrent>
 #include "SbieAPI.h"
 
 #include <ntstatus.h>
@@ -2725,6 +2726,62 @@ SB_RESULT(QVariantMap) CSbieAPI::ImBoxQuery(const QString& Root)
 	Info["DiskRoot"] = QString::fromWCharArray(rpl->disk_root);
 
 	return CSbieResult<QVariantMap>(Info);
+}
+
+//
+// Async versions of box query operations to prevent UI blocking
+//
+
+SB_PROGRESS CSbieAPI::ImBoxMountAsync(CSandBox* pBox, const QString& Password, bool bProtect, bool bAutoUnmount)
+{
+	CSbieProgressPtr pProgress = CSbieProgressPtr(new CSbieProgress());
+	QtConcurrent::run(CSbieAPI::ImBoxMountAsyncWorker, pProgress, pBox, this, Password, bProtect, bAutoUnmount);
+	return SB_PROGRESS(OP_ASYNC, pProgress);
+}
+
+void CSbieAPI::ImBoxMountAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox, CSbieAPI* pAPI, const QString& Password, bool bProtect, bool bAutoUnmount)
+{
+	SB_STATUS Status = pAPI->ImBoxMount(pBox, Password, bProtect, bAutoUnmount);
+	pProgress->Finish(Status);
+}
+
+SB_PROGRESS CSbieAPI::ImBoxUnmountAsync(CSandBox* pBox)
+{
+	CSbieProgressPtr pProgress = CSbieProgressPtr(new CSbieProgress());
+	QtConcurrent::run(CSbieAPI::ImBoxUnmountAsyncWorker, pProgress, pBox, this);
+	return SB_PROGRESS(OP_ASYNC, pProgress);
+}
+
+void CSbieAPI::ImBoxUnmountAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox, CSbieAPI* pAPI)
+{
+	SB_STATUS Status = pAPI->ImBoxUnmount(pBox);
+	pProgress->Finish(Status);
+}
+
+SB_PROGRESS CSbieAPI::ImBoxQueryAsync(const QString& Root)
+{
+	CSbieProgressPtr pProgress = CSbieProgressPtr(new CSbieProgress());
+	QtConcurrent::run(CSbieAPI::ImBoxQueryAsyncWorker, pProgress, this, Root);
+	return SB_PROGRESS(OP_ASYNC, pProgress);
+}
+
+void CSbieAPI::ImBoxQueryAsyncWorker(const CSbieProgressPtr& pProgress, CSbieAPI* pAPI, const QString& Root)
+{
+	SB_RESULT(QVariantMap) result = pAPI->ImBoxQuery(Root);
+	pProgress->Finish(result);
+}
+
+SB_PROGRESS CSbieAPI::UpdateBoxPathsAsync(CSandBox* pSandBox)
+{
+	CSbieProgressPtr pProgress = CSbieProgressPtr(new CSbieProgress());
+	QtConcurrent::run(CSbieAPI::UpdateBoxPathsAsyncWorker, pProgress, this, pSandBox);
+	return SB_PROGRESS(OP_ASYNC, pProgress);
+}
+
+void CSbieAPI::UpdateBoxPathsAsyncWorker(const CSbieProgressPtr& pProgress, CSbieAPI* pAPI, CSandBox* pSandBox)
+{
+	SB_STATUS Status = pAPI->UpdateBoxPaths(pSandBox);
+	pProgress->Finish(Status);
 }
 
 extern "C" NTSYSCALLAPI NTSTATUS NTAPI NtLockVirtualMemory(_In_ HANDLE ProcessHandle, _Inout_ PVOID *BaseAddress, _Inout_ PSIZE_T RegionSize, _In_ ULONG MapType );

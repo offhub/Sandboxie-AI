@@ -144,6 +144,19 @@ void CSandBox::UpdateDetails()
 		m_Mount.clear();
 }
 
+SB_PROGRESS CSandBox::UpdateDetailsAsync()
+{
+	CSbieProgressPtr pProgress = CSbieProgressPtr(new CSbieProgress());
+	QtConcurrent::run(CSandBox::UpdateDetailsAsyncWorker, pProgress, this);
+	return SB_PROGRESS(OP_ASYNC, pProgress);
+}
+
+void CSandBox::UpdateDetailsAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox)
+{
+	pBox->UpdateDetails();
+	pProgress->Finish(SB_OK);
+}
+
 void CSandBox::SetBoxPaths(const QString& FilePath, const QString& RegPath, const QString& IpcPath)
 {
 	//m_FileNtPath = FilePath;
@@ -841,6 +854,20 @@ SB_STATUS CSandBox::ImBoxMount(const QString& Password, bool bProtect, bool bAut
 SB_STATUS CSandBox::ImBoxUnmount()
 {
 	return m_pAPI->ImBoxUnmount(this);
+}
+
+//
+// Async versions to prevent UI blocking
+//
+
+SB_PROGRESS CSandBox::ImBoxMountAsync(const QString& Password, bool bProtect, bool bAutoUnmount)
+{
+	return m_pAPI->ImBoxMountAsync(this, Password, bProtect, bAutoUnmount);
+}
+
+SB_PROGRESS CSandBox::ImBoxUnmountAsync()
+{
+	return m_pAPI->ImBoxUnmountAsync(this);
 }
 
 SB_STATUS CSandBox::RenameSection(const QString& NewName, bool deleteOld)
