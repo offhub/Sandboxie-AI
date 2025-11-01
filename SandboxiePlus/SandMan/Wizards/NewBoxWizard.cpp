@@ -221,9 +221,8 @@ SB_STATUS CNewBoxWizard::TryToCreateBox()
             QString Location = field("boxLocation").toString();
             if (!Location.isEmpty()) {
                 pBox->SetText("FileRootPath", Location);
-                // Use async version to prevent UI blocking during wizard
-                SB_PROGRESS Progress = theAPI->UpdateBoxPathsAsync(pBox.data());
-                // No need to wait or handle async in wizard - it will complete in background
+                // Keep synchronous to ensure box is fully configured before wizard completes
+                theAPI->UpdateBoxPaths(pBox.data());
             }
 
             if (field("boxVersion").toInt() == 1) {
