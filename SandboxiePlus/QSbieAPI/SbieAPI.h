@@ -134,6 +134,11 @@ public:
 	//virtual SB_STATUS		ImBoxUpdate(  // todo
 	virtual SB_STATUS		ExecImDisk(const QString& ImageFile, const QString& Password, const QString& Command, bool bWrite, QByteArray* pBuffer, quint16 uId);
 
+	// Async versions of box query operations to prevent UI blocking
+	virtual SB_PROGRESS		ImBoxMountAsync(CSandBox* pBox, const QString& Password = QString(), bool bProtect = false, bool bAutoUnmount = false);
+	virtual SB_PROGRESS		ImBoxUnmountAsync(CSandBox* pBox);
+	virtual SB_PROGRESS		ImBoxQueryAsync(const QString& Root = QString());
+	virtual SB_PROGRESS		UpdateBoxPathsAsync(CSandBox* pSandBox);
 
 	// Monitor
 	virtual SB_STATUS		EnableMonitor(bool Enable);
@@ -234,6 +239,12 @@ protected:
 
 	virtual SB_STATUS		UpdateBoxPaths(CSandBox* pSandBox);
 	virtual SB_STATUS		UpdateProcessInfo(const CBoxedProcessPtr& pProcess);
+
+	// Worker functions for async box query operations
+	static void				ImBoxMountAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox, CSbieAPI* pAPI, const QString& Password, bool bProtect, bool bAutoUnmount);
+	static void				ImBoxUnmountAsyncWorker(const CSbieProgressPtr& pProgress, CSandBox* pBox, CSbieAPI* pAPI);
+	static void				ImBoxQueryAsyncWorker(const CSbieProgressPtr& pProgress, CSbieAPI* pAPI, const QString& Root);
+	static void				UpdateBoxPathsAsyncWorker(const CSbieProgressPtr& pProgress, CSbieAPI* pAPI, CSandBox* pSandBox);
 
 	virtual SB_STATUS		GetProcessInfo(quint32 ProcessId, quint32* pParentId = NULL, quint32* pInfo = NULL, bool* pSuspended = NULL, QString* pImagePath = NULL, QString* pCommandLine = NULL, QString* pWorkingDir = NULL);
 
