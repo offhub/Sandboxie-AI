@@ -74,7 +74,7 @@ bool CSupportDialog::CheckSupport(bool bOnRun)
 
 		CSupportDialog dialog(Message, true);
 		if(dialog.exec() == QDialog::Rejected)
-			PostQuitMessage(0);
+			QApplication::quit();
 		return true;
 	}
 
@@ -140,7 +140,7 @@ bool CSupportDialog::CheckSupport(bool bOnRun)
 #endif
 
 	if (!ShowDialog(NoGo))
-		PostQuitMessage(0);
+		QApplication::quit();
 
 	return true;
 }
