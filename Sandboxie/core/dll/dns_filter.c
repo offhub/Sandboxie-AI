@@ -478,7 +478,7 @@ _FX int WSA_WSALookupServiceBeginW(
                 Sbie_snwprintf(msg, 512, L"DNS Request Intercepted: %s%s (NS: %d, Type: %s, Hdl: 0x%x) - Using filtered response",
                     lpqsRestrictions->lpszServiceInstanceName, ClsId, lpqsRestrictions->dwNameSpace,
                     WSA_IsIPv6Query(lpqsRestrictions->lpServiceClassId) ? L"IPv6" : L"IPv4", fakeHandle);
-                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+                SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
             }
 
             Dll_Free(path_lwr);
