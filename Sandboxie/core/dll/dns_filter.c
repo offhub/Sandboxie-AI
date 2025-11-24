@@ -38,6 +38,7 @@
 #include "common/netfw.h"
 #include "common/map.h"
 #include "wsa_defs.h"
+#include "dnsapi_defs.h"
 #include "common/pattern.h"
 #include "common/str_util.h"
 #include "core/drv/api_defs.h"
@@ -68,11 +69,11 @@ void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr);
 
 
 //---------------------------------------------------------------------------
-// DnsQuery Functions
+// DnsApi Functions
 //---------------------------------------------------------------------------
 
 
-typedef DNS_STATUS (WINAPI *P_DnsQuery_W)(
+static DNS_STATUS DNSAPI_DnsQuery_W(
     PCWSTR          pszName,
     WORD            wType,
     DWORD           Options,
@@ -80,7 +81,7 @@ typedef DNS_STATUS (WINAPI *P_DnsQuery_W)(
     PDNS_RECORD*    ppQueryResults,
     PVOID*          pReserved);
 
-typedef DNS_STATUS (WINAPI *P_DnsQuery_A)(
+static DNS_STATUS DNSAPI_DnsQuery_A(
     PCSTR           pszName,
     WORD            wType,
     DWORD           Options,
@@ -88,7 +89,7 @@ typedef DNS_STATUS (WINAPI *P_DnsQuery_A)(
     PDNS_RECORD*    ppQueryResults,
     PVOID*          pReserved);
 
-typedef DNS_STATUS (WINAPI *P_DnsQuery_UTF8)(
+static DNS_STATUS DNSAPI_DnsQuery_UTF8(
     PCSTR           pszName,
     WORD            wType,
     DWORD           Options,
@@ -96,40 +97,18 @@ typedef DNS_STATUS (WINAPI *P_DnsQuery_UTF8)(
     PDNS_RECORD*    ppQueryResults,
     PVOID*          pReserved);
 
-typedef DNS_STATUS (WINAPI *P_DnsQueryEx)(
+static DNS_STATUS DNSAPI_DnsQueryEx(
     PDNS_QUERY_REQUEST  pQueryRequest,
     PDNS_QUERY_RESULT   pQueryResults,
     PDNS_QUERY_CANCEL   pCancelHandle);
 
-
-static DNS_STATUS WSA_DnsQuery_W(
+static DNS_STATUS DNSAPI_DnsQueryRaw(
     PCWSTR          pszName,
     WORD            wType,
     DWORD           Options,
     PVOID           pExtra,
-    PDNS_RECORD*    ppQueryResults,
+    PDNS_MESSAGE_BUFFER* ppMsgBuf,
     PVOID*          pReserved);
-
-static DNS_STATUS WSA_DnsQuery_A(
-    PCSTR           pszName,
-    WORD            wType,
-    DWORD           Options,
-    PVOID           pExtra,
-    PDNS_RECORD*    ppQueryResults,
-    PVOID*          pReserved);
-
-static DNS_STATUS WSA_DnsQuery_UTF8(
-    PCSTR           pszName,
-    WORD            wType,
-    DWORD           Options,
-    PVOID           pExtra,
-    PDNS_RECORD*    ppQueryResults,
-    PVOID*          pReserved);
-
-static DNS_STATUS WSA_DnsQueryEx(
-    PDNS_QUERY_REQUEST  pQueryRequest,
-    PDNS_QUERY_RESULT   pQueryResults,
-    PDNS_QUERY_CANCEL   pCancelHandle);
 
 
 //---------------------------------------------------------------------------
@@ -143,6 +122,7 @@ static P_DnsQuery_W __sys_DnsQuery_W = NULL;
 static P_DnsQuery_A __sys_DnsQuery_A = NULL;
 static P_DnsQuery_UTF8 __sys_DnsQuery_UTF8 = NULL;
 static P_DnsQueryEx __sys_DnsQueryEx = NULL;
+static P_DnsQueryRaw __sys_DnsQueryRaw = NULL;
 
 
 //---------------------------------------------------------------------------
@@ -676,6 +656,10 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
 
     //
     // Setup DnsQuery hooks from dnsapi.dll
+    // DnsQuery_W/A/UTF8 are available on Windows 2000+ (compatible with Win7/10/11)
+    // DnsQueryEx is available on Windows Vista+ (compatible with Win7/10/11)
+    // DnsQueryRaw availability varies by Windows version, checked via GetProcAddress
+    // All functions use GetProcAddress to ensure compatibility across Windows versions
     //
 
     HMODULE dnsapi_module = GetModuleHandleW(L"dnsapi.dll");
@@ -686,22 +670,27 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
     if (dnsapi_module) {
         P_DnsQuery_W DnsQuery_W = (P_DnsQuery_W)GetProcAddress(dnsapi_module, "DnsQuery_W");
         if (DnsQuery_W) {
-            SBIEDLL_HOOK(WSA_, DnsQuery_W);
+            SBIEDLL_HOOK(DNSAPI_, DnsQuery_W);
         }
 
         P_DnsQuery_A DnsQuery_A = (P_DnsQuery_A)GetProcAddress(dnsapi_module, "DnsQuery_A");
         if (DnsQuery_A) {
-            SBIEDLL_HOOK(WSA_, DnsQuery_A);
+            SBIEDLL_HOOK(DNSAPI_, DnsQuery_A);
         }
 
         P_DnsQuery_UTF8 DnsQuery_UTF8 = (P_DnsQuery_UTF8)GetProcAddress(dnsapi_module, "DnsQuery_UTF8");
         if (DnsQuery_UTF8) {
-            SBIEDLL_HOOK(WSA_, DnsQuery_UTF8);
+            SBIEDLL_HOOK(DNSAPI_, DnsQuery_UTF8);
         }
 
         P_DnsQueryEx DnsQueryEx = (P_DnsQueryEx)GetProcAddress(dnsapi_module, "DnsQueryEx");
         if (DnsQueryEx) {
-            SBIEDLL_HOOK(WSA_, DnsQueryEx);
+            SBIEDLL_HOOK(DNSAPI_, DnsQueryEx);
+        }
+
+        P_DnsQueryRaw DnsQueryRaw = (P_DnsQueryRaw)GetProcAddress(dnsapi_module, "DnsQueryRaw");
+        if (DnsQueryRaw) {
+            SBIEDLL_HOOK(DNSAPI_, DnsQueryRaw);
         }
     }
 
@@ -1037,11 +1026,11 @@ _FX int WSA_WSALookupServiceEnd(HANDLE hLookup)
 
 
 //---------------------------------------------------------------------------
-// WSA_CheckDnsFilter
+// DNS_CheckFilter
 //---------------------------------------------------------------------------
 
 
-_FX BOOLEAN WSA_CheckDnsFilter(const WCHAR* pszName, WORD wType, LIST** ppEntries)
+_FX BOOLEAN DNS_CheckFilter(const WCHAR* pszName, WORD wType, LIST** ppEntries)
 {
     if (!WSA_FilterEnabled || !pszName)
         return FALSE;
@@ -1068,11 +1057,11 @@ _FX BOOLEAN WSA_CheckDnsFilter(const WCHAR* pszName, WORD wType, LIST** ppEntrie
 
 
 //---------------------------------------------------------------------------
-// WSA_CreateDnsRecords
+// DNSAPI_CreateDnsRecords
 //---------------------------------------------------------------------------
 
 
-_FX PDNS_RECORD WSA_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEntries)
+_FX PDNS_RECORD DNSAPI_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEntries)
 {
     if (!pEntries || !pszName)
         return NULL;
@@ -1137,11 +1126,11 @@ _FX PDNS_RECORD WSA_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEn
 
 
 //---------------------------------------------------------------------------
-// WSA_DnsQuery_W
+// DNSAPI_DnsQuery_W
 //---------------------------------------------------------------------------
 
 
-_FX DNS_STATUS WSA_DnsQuery_W(
+_FX DNS_STATUS DNSAPI_DnsQuery_W(
     PCWSTR          pszName,
     WORD            wType,
     DWORD           Options,
@@ -1149,10 +1138,14 @@ _FX DNS_STATUS WSA_DnsQuery_W(
     PDNS_RECORD*    ppQueryResults,
     PVOID*          pReserved)
 {
+    // Validate parameters before processing
+    if (!pszName || !ppQueryResults)
+        return __sys_DnsQuery_W(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    
     LIST* pEntries = NULL;
     
-    if (WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
-        PDNS_RECORD pRecords = WSA_CreateDnsRecords(pszName, wType, pEntries);
+    if (DNS_CheckFilter(pszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = DNSAPI_CreateDnsRecords(pszName, wType, pEntries);
         
         if (pRecords) {
             *ppQueryResults = pRecords;
@@ -1190,11 +1183,11 @@ _FX DNS_STATUS WSA_DnsQuery_W(
 
 
 //---------------------------------------------------------------------------
-// WSA_DnsQuery_A
+// DNSAPI_DnsQuery_A
 //---------------------------------------------------------------------------
 
 
-_FX DNS_STATUS WSA_DnsQuery_A(
+_FX DNS_STATUS DNSAPI_DnsQuery_A(
     PCSTR           pszName,
     WORD            wType,
     DWORD           Options,
@@ -1212,8 +1205,8 @@ _FX DNS_STATUS WSA_DnsQuery_A(
 
     LIST* pEntries = NULL;
     
-    if (WSA_CheckDnsFilter(wszName, wType, &pEntries)) {
-        PDNS_RECORD pRecords = WSA_CreateDnsRecords(wszName, wType, pEntries);
+    if (DNS_CheckFilter(wszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = DNSAPI_CreateDnsRecords(wszName, wType, pEntries);
         
         Dll_Free(wszName);
         
@@ -1254,11 +1247,11 @@ _FX DNS_STATUS WSA_DnsQuery_A(
 
 
 //---------------------------------------------------------------------------
-// WSA_DnsQuery_UTF8
+// DNSAPI_DnsQuery_UTF8
 //---------------------------------------------------------------------------
 
 
-_FX DNS_STATUS WSA_DnsQuery_UTF8(
+_FX DNS_STATUS DNSAPI_DnsQuery_UTF8(
     PCSTR           pszName,
     WORD            wType,
     DWORD           Options,
@@ -1276,8 +1269,8 @@ _FX DNS_STATUS WSA_DnsQuery_UTF8(
 
     LIST* pEntries = NULL;
     
-    if (WSA_CheckDnsFilter(wszName, wType, &pEntries)) {
-        PDNS_RECORD pRecords = WSA_CreateDnsRecords(wszName, wType, pEntries);
+    if (DNS_CheckFilter(wszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = DNSAPI_CreateDnsRecords(wszName, wType, pEntries);
         
         Dll_Free(wszName);
         
@@ -1318,15 +1311,16 @@ _FX DNS_STATUS WSA_DnsQuery_UTF8(
 
 
 //---------------------------------------------------------------------------
-// WSA_DnsQueryEx
+// DNSAPI_DnsQueryEx
 //---------------------------------------------------------------------------
 
 
-_FX DNS_STATUS WSA_DnsQueryEx(
+_FX DNS_STATUS DNSAPI_DnsQueryEx(
     PDNS_QUERY_REQUEST  pQueryRequest,
     PDNS_QUERY_RESULT   pQueryResults,
     PDNS_QUERY_CANCEL   pCancelHandle)
 {
+    // Validate parameters before processing
     if (!pQueryRequest || !pQueryResults)
         return __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
 
@@ -1334,8 +1328,8 @@ _FX DNS_STATUS WSA_DnsQueryEx(
     const WCHAR* pszName = pQueryRequest->QueryName;
     WORD wType = pQueryRequest->QueryType;
     
-    if (pszName && WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
-        PDNS_RECORD pRecords = WSA_CreateDnsRecords(pszName, wType, pEntries);
+    if (pszName && DNS_CheckFilter(pszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = DNSAPI_CreateDnsRecords(pszName, wType, pEntries);
         
         if (pRecords) {
             memset(pQueryResults, 0, sizeof(DNS_QUERY_RESULT));
@@ -1370,6 +1364,245 @@ _FX DNS_STATUS WSA_DnsQueryEx(
     if (WSA_DnsTraceFlag && pszName) {
         WCHAR msg[512];
         Sbie_snwprintf(msg, 512, L"DNS QueryEx: %s (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
+}
+
+
+//---------------------------------------------------------------------------
+// DNSAPI_CreateDnsMessageBuffer
+//---------------------------------------------------------------------------
+
+
+_FX PDNS_MESSAGE_BUFFER DNSAPI_CreateDnsMessageBuffer(const WCHAR* pszName, WORD wType, LIST* pEntries)
+{
+    if (!pEntries || !pszName)
+        return NULL;
+
+    // Convert domain name to DNS wire format (length-prefixed labels)
+    char dnsName[256];
+    int dnsNameLen = 0;
+    
+    // Convert Unicode to ANSI
+    int nameLen = WideCharToMultiByte(CP_ACP, 0, pszName, -1, NULL, 0, NULL, NULL);
+    if (nameLen <= 0 || nameLen > 253)
+        return NULL;
+    
+    char asciiName[256];
+    WideCharToMultiByte(CP_ACP, 0, pszName, -1, asciiName, sizeof(asciiName), NULL, NULL);
+    
+    // Convert to DNS wire format (e.g., "www.example.com" -> "\3www\7example\3com\0")
+    char* src = asciiName;
+    char* dst = dnsName;
+    char* labelStart = dst + 1;
+    *dst = 0;
+    
+    while (*src) {
+        if (*src == '.') {
+            *dst = (char)(labelStart - dst - 1);
+            dst = labelStart;
+            labelStart = dst + 1;
+            *dst = 0;
+        } else {
+            *labelStart++ = *src;
+        }
+        src++;
+    }
+    if (labelStart > dst + 1) {
+        *dst = (char)(labelStart - dst - 1);
+        dst = labelStart;
+    }
+    *dst++ = 0;
+    dnsNameLen = (int)(dst - dnsName);
+    
+    // Count matching IP entries
+    DWORD ipCount = 0;
+    IP_ENTRY* entry;
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            ipCount++;
+        }
+    }
+    
+    if (ipCount == 0)
+        return NULL;
+    
+    // Calculate buffer size
+    // DNS packet: Header (12 bytes) + Question section + Answer section
+    DWORD questionSize = dnsNameLen + 4; // name + type (2) + class (2)
+    DWORD answerRecordSize = 0;
+    
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            // name (pointer: 2 bytes) + type (2) + class (2) + ttl (4) + rdlength (2) + rdata
+            answerRecordSize += 2 + 2 + 2 + 4 + 2 + (entry->Type == AF_INET ? 4 : 16);
+        }
+    }
+    
+    // Allocate raw buffer for DNS packet (no DNS_MESSAGE_BUFFER header, just raw bytes)
+    DWORD packetSize = 12 + questionSize + answerRecordSize;
+    PDNS_MESSAGE_BUFFER pMsgBuf = (PDNS_MESSAGE_BUFFER)Dll_Alloc(packetSize);
+    if (!pMsgBuf)
+        return NULL;
+    
+    memset(pMsgBuf, 0, packetSize);
+    
+    // Build DNS header - start at beginning of buffer
+    BYTE* pData = (BYTE*)pMsgBuf;
+    BYTE* pBase = pData;
+    
+    // Transaction ID (16 bits) - use a simple value
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // Flags (16 bits): Standard query response, no error
+    // QR=1 (response), Opcode=0 (query), AA=1 (authoritative), TC=0, RD=1, RA=1, Z=0, RCODE=0
+    *pData++ = 0x85; // 10000101
+    *pData++ = 0x80; // 10000000
+    
+    // QDCOUNT (16 bits) - 1 question
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // ANCOUNT (16 bits) - number of answers
+    *pData++ = (BYTE)(ipCount >> 8);
+    *pData++ = (BYTE)(ipCount & 0xFF);
+    
+    // NSCOUNT (16 bits) - 0 authority records
+    *pData++ = 0x00;
+    *pData++ = 0x00;
+    
+    // ARCOUNT (16 bits) - 0 additional records
+    *pData++ = 0x00;
+    *pData++ = 0x00;
+    
+    // Question section
+    memcpy(pData, dnsName, dnsNameLen);
+    pData += dnsNameLen;
+    
+    // QTYPE (16 bits)
+    *pData++ = (BYTE)(wType >> 8);
+    *pData++ = (BYTE)(wType & 0xFF);
+    
+    // QCLASS (16 bits) - IN (Internet)
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // Answer section
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            
+            // Name (pointer to question name)
+            *pData++ = 0xC0; // Pointer flag
+            *pData++ = 0x0C; // Offset to name in question (after header)
+            
+            // TYPE (16 bits)
+            WORD type = (entry->Type == AF_INET) ? DNS_TYPE_A : DNS_TYPE_AAAA;
+            *pData++ = (BYTE)(type >> 8);
+            *pData++ = (BYTE)(type & 0xFF);
+            
+            // CLASS (16 bits) - IN
+            *pData++ = 0x00;
+            *pData++ = 0x01;
+            
+            // TTL (32 bits) - 3600 seconds
+            *pData++ = 0x00;
+            *pData++ = 0x00;
+            *pData++ = 0x0E;
+            *pData++ = 0x10;
+            
+            // RDLENGTH (16 bits)
+            WORD rdLen = (entry->Type == AF_INET) ? 4 : 16;
+            *pData++ = (BYTE)(rdLen >> 8);
+            *pData++ = (BYTE)(rdLen & 0xFF);
+            
+            // RDATA
+            if (entry->Type == AF_INET) {
+                // IPv4 address (4 bytes)
+                DWORD addr = entry->IP.Data32[3];
+                *pData++ = (BYTE)(addr & 0xFF);
+                *pData++ = (BYTE)((addr >> 8) & 0xFF);
+                *pData++ = (BYTE)((addr >> 16) & 0xFF);
+                *pData++ = (BYTE)((addr >> 24) & 0xFF);
+            } else {
+                // IPv6 address (16 bytes)
+                memcpy(pData, entry->IP.Data, 16);
+                pData += 16;
+            }
+        }
+    }
+    
+    // DNS_MESSAGE_BUFFER is just the raw packet data, no need to set fields
+    // The structure is properly formatted already
+    
+    return pMsgBuf;
+}
+
+
+//---------------------------------------------------------------------------
+// DNSAPI_DnsQueryRaw
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS DNSAPI_DnsQueryRaw(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_MESSAGE_BUFFER* ppMsgBuf,
+    PVOID*          pReserved)
+{
+    // Validate parameters before processing
+    if (!pszName || !ppMsgBuf)
+        return __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
+    
+    LIST* pEntries = NULL;
+    
+    if (DNS_CheckFilter(pszName, wType, &pEntries)) {
+        // If filtered without IPs (blocking), return NXDOMAIN
+        if (!pEntries) {
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS QueryRaw Intercepted: %s (Type: %d) - Blocked (NXDOMAIN)", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            return DNS_ERROR_RCODE_NAME_ERROR;
+        }
+        
+        // Construct raw DNS response packet with configured IPs
+        PDNS_MESSAGE_BUFFER pMsgBuf = DNSAPI_CreateDnsMessageBuffer(pszName, wType, pEntries);
+        
+        if (pMsgBuf) {
+            *ppMsgBuf = pMsgBuf;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS QueryRaw Intercepted: %s (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        // Failed to construct packet, fall through to original
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d) - Failed to construct packet, passing through", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+        }
+    }
+
+    // Not filtered or packet construction failed - call original function
+    DNS_STATUS status = __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
+    
+    if (WSA_DnsTraceFlag) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d, Status: %d)", pszName, wType, status);
         SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
     }
     
