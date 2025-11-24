@@ -880,9 +880,11 @@ _FX PDNS_RECORD WSA_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEn
         // Allocate and set name
         ULONG nameLen = (wcslen(pszName) + 1) * sizeof(WCHAR);
         pRecord->pName = (PWSTR)Dll_Alloc(nameLen);
-        if (pRecord->pName) {
-            wcscpy(pRecord->pName, pszName);
+        if (!pRecord->pName) {
+            Dll_Free(pRecord);
+            continue;
         }
+        wcscpy(pRecord->pName, pszName);
         
         pRecord->wType = (entry->Type == AF_INET) ? DNS_TYPE_A : DNS_TYPE_AAAA;
         pRecord->wDataLength = (entry->Type == AF_INET) ? sizeof(IP4_ADDRESS) : sizeof(IP6_ADDRESS);
