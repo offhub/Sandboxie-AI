@@ -55,10 +55,6 @@ public slots:
 	void				Close();
 	void				OnToggle(bool checked);
 
-	void				SetProgress(int value, int maximum);
-	void				ShowProgress();
-	void				HideProgress();
-
 private slots:
 	void				OnUpdate();
 	void				OnText();
@@ -89,7 +85,6 @@ private:
 	QAbstractButton*	m_pRegExp;
 	QComboBox*			m_pColumn;
 	QAbstractButton*	m_pHighLight;
-	QProgressBar*		m_pProgressBar;
 
 	QRegularExpression	m_RegExp;
 	bool				m_bAlwaysRaw;

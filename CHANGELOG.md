@@ -5,118 +5,75 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 
 
-
-## [1.16.8 / 5.71.8] - 2025-11-24
-
-### Added
-- added file search/filter to file panel can be opened with Ctrl+F in the file panel
-- added UI for 'ProtectAdminOnly=y/n'
-
-### Fixed
-- fixed issue with SbieApi_QueryDrvInfo in 32-bit SbieDll.dll causing improper certificate warning
-
-
-
-## [1.16.7 / 5.71.7] - 2025-11-16
+## [1.16.5 / 5.71.5] - 2025-10-xx
 
 ### Added
-- added checkbox for 'NoRestartOnPCA=y' to the box options
+- **Enhanced INI Editor:** Major improvements to the "Edit INI Section" dialog.
+  - **Dedicated Editor Settings:** A new "Editor Settings" window for configuring all INI editor behavior.
+  - **Setting Validation:** INI keys are now visually validated against `SbieSettings.ini` to catch configuration errors. (1.16.2)
+  - **Contextual Tooltips:** Tooltips for INI keys with metadata sourced from `SbieSettings.ini`, and configurable verbosity levels. (1.16.2, 1.16.4)
+  - **Auto-completion:** Auto-completion for INI keys using `SbieSettings.ini` as a reference, with a consent-based opt-in system. (1.16.3)
 
-### Changed
-- reverted default 'UseWin32kHooks=y' back to 'n' as it caused issues with other apps
-- improved named syscall invocation when using WoW64
-
-### Fixed
-- fixed 'OpenWndStation=y' not working with 'SandboxieAllGroup=y'
-- fixed missing parameter validation in SbieIniServer
-- fixed issue with certificate parsing
-- fixed an issue retrieving driver info
-- fixed potential handle leak in SbieDll.dll related to SbieApi_DeviceHandle [#5097](https://github.com/sandboxie-plus/Sandboxie/issues/5097)
-
-
-
-## [1.16.6 / 5.71.6] - 2025-11-10
-
-### Changed
-- 'UseWin32kHooks=y' is now the default for all processes, greatly improving compatibility with Electron apps
-
-### Fixed
-- fixed failed to connect to the driver on Windows 7 [#5068](https://github.com/sandboxie-plus/Sandboxie/issues/5068)
-- fixed Actual Budget no longer working [#5071](https://github.com/sandboxie-plus/Sandboxie/issues/5071)
-- fixed incompatibility with Firefox Nightly 146
-
-
-
-## [1.16.5 / 5.71.5] - 2025-11-04
-
-### Added
-- Enhanced INI Editor: Major improvements to the "Edit INI Section" dialog.
-  - Dedicated Editor Settings: A new "Editor Settings" window for configuring all INI editor behavior.
-  - Setting Validation: INI keys are now visually validated against `SbieSettings.ini` to catch configuration errors. (1.16.2)
-  - Contextual Tooltips: Tooltips for INI keys with metadata sourced from `SbieSettings.ini`, and configurable verbosity levels. (1.16.2, 1.16.4)
-  - Auto-completion: Auto-completion for INI keys using `SbieSettings.ini` as a reference, with a consent-based opt-in system. (1.16.3)
-  - New Configuration Options: [`Sandboxie-Plus.ini`]
+  - **New Configuration Options:** [`Sandboxie-Plus.ini`]
     - `Options/ValidateIniKeys` bool - enable/disable INI key validation (default: true) (1.16.2)
     - `Options/EnableIniTooltips` int - control INI tooltip verbosity: 0=No tooltips, 1=Basic info, 2=Full details (1.16.2)
     - `Options/EnablePopupTooltips` int - control popup tooltip verbosity: 0=No tooltips, 1=Basic info, 2=Full details (1.16.4)
     - `Options/AutoCompletionConsent` bool - user consent for the auto-completion feature (1.16.3)
     - `Options/EnableAutoCompletion` int - auto-completion mode: 0=Disabled, 1=Manual/Case, 2=Auto/Case (1.16.3)
     - `Options/EnableFuzzyMatching` bool - enable fuzzy matching for auto-completion (1.16.3)
-  - Customization via `SbieSettings.user.ini`:
+
+  - **Customization via `SbieSettings.user.ini`:**
     - Users can now make additional customizations using the `SbieSettings.user.ini` file to fine-tune the configuration further. (1.16.3)
+    
     - For more detailed guidance on configuring these options, please refer to the comments in the `SbieSettings.ini` file. This includes explanations of all new and existing settings, providing clarity for advanced configurations.
-- preserve custom box colors: custom colors set for a sandbox will now persist even after changing the `Box Type Preset` [#5025](https://github.com/sandboxie-plus/Sandboxie/pull/5025) (thanks Pinefone)
-- added alpha transparency to sandbox border settings [#5037](https://github.com/sandboxie-plus/Sandboxie/pull/5037)
-- user interface: start with all groups collapsed [#5052](https://github.com/sandboxie-plus/Sandboxie/issues/5052)
-- user interface: add menu option to collapse/expand groups [#5053](https://github.com/sandboxie-plus/Sandboxie/issues/5053)
+
+- **Preserve Custom Box Colors:** Custom colors set for a sandbox will now persist even after changing the `Box Type Preset`. [#5025](https://github.com/sandboxie-plus/Sandboxie/pull/5025) (thanks Pinefone)
+- added alpha transparency to sandbox border settings. [#5037](https://github.com/sandboxie-plus/Sandboxie/pull/5037)
 
 ### Changed
-- support certificates can now contain multiple HwID's to simplify handling
+- Support Certificates can now contain multiple HWID's to simplify handling
 - context menu icon upgrade [#5038](https://github.com/sandboxie-plus/Sandboxie/issues/5038)
-- improved Win32 syscall handling (experimental) when `UseWin32kFilterTable=y` is set the `KeServiceDescriptorTableFilter` will be used instead of `KeServiceDescriptorTableShadow` where appropriate
-- improved default toolbar loadout
 
 ### Fixed
-- fixed BindAdapter reliability when VPN/bound adapter is disconnected [#5055](https://github.com/sandboxie-plus/Sandboxie/pull/5055) [#4896](https://github.com/sandboxie-plus/Sandboxie/issues/4896)
-- fixed WOW6432Node bug, becomes `HKLM\SOFTWARE\WOW6432Node\WOW6432Node` upon necessary creation of a 2nd non-existent subkey [#5057](https://github.com/sandboxie-plus/Sandboxie/issues/5057)
-- fixed PowerShell is able to launch an executable inside a folder added to program control [#5027](https://github.com/sandboxie-plus/Sandboxie/issues/5027)
+- WOW6432Node bug, becomes "HKLM\SOFTWARE\WOW6432Node\WOW6432Node" upon necessary creation of a 2nd non-existent subkey [#5057](https://github.com/sandboxie-plus/Sandboxie/issues/5057)
 
 
 
 ## [1.16.4 / 5.71.4] - 2025-10-02
 
 ### Added
-- added option to block non-administrative session leader (SandMan.exe or SbieCtrl.exe) from accessing encrypted box data
-  - Note: this is now enabled by default to disable it use `ProtectAdminOnly=n`
-
-### Changed
-- improved checks in `Thread_CheckObject_CommonEx` for encrypted boxes
+- added option to block non administrative session leader (sandman.exe or sbiectrl.exe) from accessing encrypted box data
+  - Note: this is now enabled by default to disable it use 'ProtectAdminOnly=n'
 
 ### Fixed
-- fixed Sandboxie-Plus 1.16.3 fails to connect to driver on Windows Preview build 27943 [#5003](https://github.com/sandboxie-plus/Sandboxie/issues/5003)
-- fixed latest Signal crashing
+- Sandboxie-Plus 1.16.3 Fails to Connect to Driver on Windows Preview Build 27943 [#5003](https://github.com/sandboxie-plus/Sandboxie/issues/5003)
+- fixed latest signal crashing
+
+### Changed
+- improved checks in Thread_CheckObject_CommonEx for encrypted boxes
+
 
 
 
 ## [1.16.3 / 5.71.3] - 2025-09-08
 
 ### Changed
-- reworked driver imports to despite of being build with VS2022 allow it to load on Windows 7 [#4942](https://github.com/sandboxie-plus/Sandboxie/issues/4942)
+- reworked driver imports to despite of being build with VS2022 allow it to load on windows 7 [#4942](https://github.com/sandboxie-plus/Sandboxie/issues/4942)
 - improved dark mode color pattern
-- switched to Qt 6.8.3 with [Windows 7 compatibility patches](https://github.com/crystalidea/qt6windows7)
+- switched to Qt 6.8.3 with [windows 7 compatibility patches](https://github.com/crystalidea/qt6windows7)
 - validated compatibility with Windows build 27934 and updated DynData
 
 ### Fixed
-- fixed 1.16.2 = tray menu missing in action [#4940](https://github.com/sandboxie-plus/Sandboxie/issues/4940)
+- fixed 1.16.2 = Tray Menu Missing in Action [#4940](https://github.com/sandboxie-plus/Sandboxie/issues/4940)
 - fixed UAC prompt layout at higher DPI in secure desktop [#4953](https://github.com/sandboxie-plus/Sandboxie/issues/4953) (thanks gexgd0419)
 - fixed RTL layout for Arabic in UAC prompt dialog [#4957](https://github.com/sandboxie-plus/Sandboxie/pull/4957) (thanks gexgd0419)
-- fixed 1.16.1 dark mode help popup window with light color background [#4903](https://github.com/sandboxie-plus/Sandboxie/issues/4903)
-- fixed network options cannot be persisted during editing [#4899](https://github.com/sandboxie-plus/Sandboxie/issues/4899)
-- fixed cleanup on aisle Qt5 - installer should remove obsolete files after Sandboxie 1.16.x [#4934](https://github.com/sandboxie-plus/Sandboxie/issues/4934)
+- fixed 1.16.1 Dark mode help popup window with light color background [#4903](https://github.com/sandboxie-plus/Sandboxie/issues/4903)
+- fixed Network options cannot be persisted during editing [#4899](https://github.com/sandboxie-plus/Sandboxie/issues/4899)
+- fixed Cleanup on Aisle Qt5 - Installer should remove obsolete files after Sandboxie 1.16.x [#4934](https://github.com/sandboxie-plus/Sandboxie/issues/4934)
 - fixed on restart as admin windows was not shown
 
 ### Removed
-- removed obsolete code which was long superseded by new implementations
+- remove obsolete code which was long superseded by new implementations
 
 
 
@@ -1990,7 +1947,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - added creation of all default folders in privacy box type [#2218](https://github.com/sandboxie-plus/Sandboxie/issues/2218)
 
 ### Changed
-- improved SandMan settings behaviour for non-admin users [#2123](https://github.com/sandboxie-plus/Sandboxie/issues/2123)
+- improved SandMan settings behaviour for non admin users [#2123](https://github.com/sandboxie-plus/Sandboxie/issues/2123)
 
 ### Fixed
 - fixed issues with group moving via drag and drop
@@ -3428,7 +3385,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - greatly improved trace log performance
 - MSI Server can now run with the "FakeAdminRights=y" and "DropAdminRights=y" options [#600](https://github.com/sandboxie-plus/Sandboxie/issues/600)
   - special service allowance for the MSI Server can be disabled with "MsiInstallerExemptions=n"
-- changed SCM access check behaviour; non-elevated users can now start services with a user token
+- changed SCM access check behaviour; non elevated users can now start services with a user token
   - elevation is now only required to start services with a system token
 - reworked the trace log mechanism to be more verbose
 - reworked RPC mechanism to be more flexible
@@ -3591,7 +3548,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Fixed
 - fixed issue child window closing terminating application when main was hidden [#349](https://github.com/sandboxie-plus/Sandboxie/issues/349)
-- fixed issues with non-modal windows [#349](https://github.com/sandboxie-plus/Sandboxie/issues/349)
+- fixed issues with non modal windows [#349](https://github.com/sandboxie-plus/Sandboxie/issues/349)
 - fixed issues connecting to driver in portable mode
 - fixed minor issues with snapshot window
 - fixed missing error message when attempting to create an already existing sandbox [#359](https://github.com/sandboxie-plus/Sandboxie/issues/359)
@@ -3842,7 +3799,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - terminated boxed processes are now kept listed for a couple of seconds
 - reworked sandbox deletion mechanism of the new UI
 - restructured sandbox options window
-- SbieDll.dll can now be compiled with an up to date ntdll.lib (Thanks to TechLord from Team-IRA for help)
+- SbieDLL.dll can now be compiled with an up to date ntdll.lib (Thanks to TechLord from Team-IRA for help)
 - improved automated driver self repair
 
 ### Fixed
@@ -3908,7 +3865,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 ### Changed
 - moved code injection mechanism from SbieSvc to SbieDll
 - moved function hooking mechanism from SbieDrv to SbieDll
-- introduced a new driverless method to resolve WoW64 ntdll base address
+- introduced a new driverless method to resolve wow64 ntdll base address
 
 ### Removed
 - removed support for Windows Vista x64
@@ -4051,7 +4008,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - fixed missing initialization in service server that caused sandboxed programs to crash when querying service status
 - fixed many bugs that caused the SbieDrv.sys to BSoD when running with Driver Verifier enabled [#57](https://github.com/sandboxie-plus/Sandboxie/issues/57)
   - 0xF6 in GetThreadTokenOwnerPid and File_Api_Rename
-  - missing non-optional parameter for FltGetFileNameInformation in File_PreOperation
+  - missing non optional parameter for FltGetFileNameInformation in File_PreOperation
   - 0xE3 in Key_StoreValue and Key_PreDataInject
 
 
@@ -4105,8 +4062,8 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 - Sbie driver now first checks the home path for the configuration file Sandboxie.ini before checking SystemRoot
 
 ### Fixed
-- FIXED SECURITY ISSUE ID-1: sandboxed processes could obtain a write handle on non-sandboxed processes (thanks Diversenok)
-  - this allowed to inject code in non-sandboxed processes
+- FIXED SECURITY ISSUE ID-1: sandboxed processes could obtain a write handle on non sandboxed processes (thanks Diversenok)
+  - this allowed to inject code in non sandboxed processes
 - fixed issue boxed services not starting when the path contained a space
 - NtQueryInformationProcess now returns the proper sandboxed path for sandboxed processes
 

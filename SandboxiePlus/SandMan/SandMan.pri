@@ -12,8 +12,6 @@ HEADERS += ./stdafx.h \
     ./Models/SbieModel.h \
     ./Models/TraceModel.h \
     ./Models/MonitorModel.h \
-    ./Models/NtObjectModel.h \
-    ./Views/NtObjectView.h \
     ./Views/SbieView.h \
     ./Views/FileView.h \
     ./Views/TraceView.h \
@@ -67,8 +65,6 @@ SOURCES += ./main.cpp \
     ./Models/TraceModel.cpp \
     ./Models/MonitorModel.cpp \
     ./Models/SbieModel.cpp \
-    ./Models/NtObjectModel.cpp \
-    ./Views/NtObjectView.cpp \
     ./Views/SbieView.cpp \
     ./Views/FileView.cpp \
     ./Views/TraceView.cpp \

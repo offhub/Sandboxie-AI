@@ -533,6 +533,7 @@ BOOL File_WriteProcessMemory(
         }
     }
 
+    extern BOOLEAN Dll_HookTrace;
     if (Dll_HookTrace) {
 
         WCHAR* pModule = NULL;

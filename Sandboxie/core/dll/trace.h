@@ -40,9 +40,5 @@ void BufferToHexW(const void* lpBuffer, size_t nSize, wchar_t* outBuf, size_t ou
 
 //---------------------------------------------------------------------------
 
-extern BOOLEAN Dll_HookTrace;
-
-//---------------------------------------------------------------------------
-
 
 #endif /* _MY_TRACE_H */

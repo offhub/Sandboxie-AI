@@ -2147,10 +2147,6 @@ Kenarlık rengini değiştirmek için tıklayın
 Fare imleci yalnızca pencere başlığında ise çerçeveyi göster
 .
 
-3820;txt;01
-Alfa
-.
-
 #----------------------------------------------------------------------------
 # Sandboxie Control:  Korumalı Alan Ayarları:  Kurtarma
 #----------------------------------------------------------------------------
