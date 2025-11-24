@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright 2022 David Xanatos, xanasoft.com
  *
  * This program is free software: you can redistribute it and/or modify
@@ -17,6 +17,13 @@
 
 //---------------------------------------------------------------------------
 // DNS Filter
+//
+// IMPORTANT: HOSTENT structures in BLOB format use RELATIVE POINTERS (offsets)
+//            not absolute pointers. All pointer-typed fields in HOSTENT contain
+//            offset values from the HOSTENT base address. Consumer code must
+//            convert these offsets to absolute pointers using ABS_PTR before
+//            dereferencing. This is required by Windows BLOB specification for
+//            relocatable data structures.
 //---------------------------------------------------------------------------
 
 #define NOGDI
@@ -26,6 +33,7 @@
 #include <wchar.h>
 #include <oleauto.h>
 #include <SvcGuid.h>
+#include <windns.h>
 #include "common/my_wsa.h"
 #include "common/netfw.h"
 #include "common/map.h"
@@ -58,12 +66,83 @@ static int WSA_WSALookupServiceEnd(HANDLE hLookup);
 BOOLEAN WSA_GetIP(const short* addr, int addrlen, IP_ADDRESS* pIP);
 void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr);
 
+
+//---------------------------------------------------------------------------
+// DnsQuery Functions
+//---------------------------------------------------------------------------
+
+
+typedef DNS_STATUS (WINAPI *P_DnsQuery_W)(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+typedef DNS_STATUS (WINAPI *P_DnsQuery_A)(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+typedef DNS_STATUS (WINAPI *P_DnsQuery_UTF8)(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+typedef DNS_STATUS (WINAPI *P_DnsQueryEx)(
+    PDNS_QUERY_REQUEST  pQueryRequest,
+    PDNS_QUERY_RESULT   pQueryResults,
+    PDNS_QUERY_CANCEL   pCancelHandle);
+
+
+static DNS_STATUS WSA_DnsQuery_W(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+static DNS_STATUS WSA_DnsQuery_A(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+static DNS_STATUS WSA_DnsQuery_UTF8(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved);
+
+static DNS_STATUS WSA_DnsQueryEx(
+    PDNS_QUERY_REQUEST  pQueryRequest,
+    PDNS_QUERY_RESULT   pQueryResults,
+    PDNS_QUERY_CANCEL   pCancelHandle);
+
+
 //---------------------------------------------------------------------------
 
 
 static P_WSALookupServiceBeginW __sys_WSALookupServiceBeginW = NULL;
 static P_WSALookupServiceNextW __sys_WSALookupServiceNextW = NULL;
 static P_WSALookupServiceEnd __sys_WSALookupServiceEnd = NULL;
+
+static P_DnsQuery_W __sys_DnsQuery_W = NULL;
+static P_DnsQuery_A __sys_DnsQuery_A = NULL;
+static P_DnsQuery_UTF8 __sys_DnsQuery_UTF8 = NULL;
+static P_DnsQueryEx __sys_DnsQueryEx = NULL;
 
 
 //---------------------------------------------------------------------------
@@ -85,7 +164,7 @@ typedef struct _IP_ENTRY
 } IP_ENTRY;
 
 typedef struct _WSA_LOOKUP {
-    LIST* pEntries;
+    LIST* pEntries;          // THREAD SAFETY: Read-only after initialization; safe for concurrent reads
     BOOLEAN NoMore;
     WCHAR* DomainName;       // Request Domain
     GUID* ServiceClassId;    // Request Class ID
@@ -134,7 +213,60 @@ _FX BOOLEAN WSA_IsIPv6Query(LPGUID lpServiceClassId)
 }
 
 //---------------------------------------------------------------------------
+// Helper macros for alignment and relative pointers
+//---------------------------------------------------------------------------
+
+// Static assertion to ensure pointer size matches uintptr_t (required for offset storage)
+// This validates our assumption that offsets can be safely stored in pointer-typed fields
+#if defined(_WIN64)
+static_assert(sizeof(void*) == sizeof(uintptr_t) && sizeof(void*) == 8, "64-bit pointer size mismatch");
+#else
+static_assert(sizeof(void*) == sizeof(uintptr_t) && sizeof(void*) == 4, "32-bit pointer size mismatch");
+#endif
+
+// Align pointer up to specified boundary (must be power of 2)
+#define ALIGN_UP(ptr, align) (BYTE*)((((UINT_PTR)(ptr)) + ((align)-1)) & ~((UINT_PTR)((align)-1)))
+
+// Relative pointer helpers for HOSTENT blob
+// Windows BLOB format uses offsets (not absolute pointers) from the base address
+// This is required for the HOSTENT structure to be relocatable in memory
+#define REL_OFFSET(base, ptr) ((uintptr_t)((BYTE*)(ptr) - (BYTE*)(base)))
+#define ABS_PTR(base, rel)    ((void*)(((BYTE*)(base)) + (uintptr_t)(rel)))
+
+// Extract offset value from a pointer-typed field that actually contains a relative offset
+// Use this when reading HOSTENT blob relative pointers stored in pointer-typed fields
+// NOTE: This extracts the stored offset value, not a pointer - do not dereference the result
+static inline uintptr_t GET_REL_FROM_PTR(void* p) {
+    return (uintptr_t)(p);
+}
+
+// Debug buffer bounds checking (only in debug builds)
+#ifdef _DEBUG
+#define CHECK_BUFFER_SPACE(ptr, size, end) \
+    do { if ((BYTE*)(ptr) + (size) > (BYTE*)(end)) { \
+        SetLastError(WSAEFAULT); \
+        return FALSE; \
+    } } while(0)
+#else
+#define CHECK_BUFFER_SPACE(ptr, size, end) ((void)0)
+#endif
+
+//---------------------------------------------------------------------------
 // WSA_FillResponseStructure
+//
+// Builds a complete WSAQUERYSETW structure with DNS results in a single buffer.
+// Memory layout: WSAQUERYSETW | ServiceInstanceName | QueryString | CSADDR_INFO[] | 
+//                SOCKADDR[] | BLOB | HOSTENT | h_name | h_aliases | h_addr_list | IPs
+//
+// IMPORTANT: The HOSTENT structure uses RELATIVE pointers (offsets from hostentBase)
+//            as per Windows BLOB specification for relocatable data structures.
+//
+// Encoding: Domain names are converted from WCHAR to ANSI (CP_ACP) for HOSTENT
+//           compatibility with Windows host resolution APIs.
+//
+// Thread Safety: This function reads from shared pLookup->pEntries list but does
+//                not modify it. Concurrent calls are safe if the list is immutable
+//                after initialization. Each call writes to caller-provided buffer.
 //---------------------------------------------------------------------------
 
 _FX BOOLEAN WSA_FillResponseStructure(
@@ -142,7 +274,8 @@ _FX BOOLEAN WSA_FillResponseStructure(
     LPWSAQUERYSETW lpqsResults,
     LPDWORD lpdwBufferLength)
 {
-    if (!pLookup || !pLookup->pEntries)
+    // Validate input parameters
+    if (!pLookup || !pLookup->pEntries || !lpqsResults || !lpdwBufferLength)
         return FALSE;
 
     if (!pLookup->DomainName)
@@ -150,13 +283,26 @@ _FX BOOLEAN WSA_FillResponseStructure(
 
     BOOLEAN isIPv6Query = WSA_IsIPv6Query(pLookup->ServiceClassId);
 
+    // Cache string length to avoid repeated wcslen calls
+    SIZE_T domainChars = wcslen(pLookup->DomainName);
+    
+    // Convert domain name to narrow string (ANSI - CP_ACP) for HOSTENT
+    // NOTE: Using CP_ACP encoding as Windows HOSTENT APIs expect ANSI strings
+    // Pre-compute converted length for accurate size calculation
+    int hostNameBytesNeeded = WideCharToMultiByte(CP_ACP, 0, pLookup->DomainName, (int)(domainChars + 1), NULL, 0, NULL, NULL);
+    if (hostNameBytesNeeded <= 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     // Calc buffer size needed
-    DWORD neededSize = sizeof(WSAQUERYSETW);
-    DWORD domainNameLen = (wcslen(pLookup->DomainName) + 1) * sizeof(WCHAR);
-    neededSize += domainNameLen;
+    SIZE_T neededSize = sizeof(WSAQUERYSETW);
+    SIZE_T domainNameLen = (domainChars + 1) * sizeof(WCHAR);
+    neededSize += domainNameLen;  // for lpszServiceInstanceName
+    neededSize += domainNameLen;  // for lpszQueryString
 
     // Calc IP size
-    DWORD ipCount = 0;
+    SIZE_T ipCount = 0;
     IP_ENTRY* entry;
 
     // Filter IP by type
@@ -172,10 +318,16 @@ _FX BOOLEAN WSA_FillResponseStructure(
         return FALSE;
     }
 
-    DWORD csaddrSize = sizeof(CSADDR_INFO) * ipCount;
+    // Defensive: ensure ipCount fits in DWORD before casting (extremely large rule lists)
+    if (ipCount > 0xFFFFFFFFUL) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    SIZE_T csaddrSize = (SIZE_T)ipCount * sizeof(CSADDR_INFO);
     neededSize += csaddrSize;
 
-    DWORD sockaddrSize = 0;
+    SIZE_T sockaddrSize = 0;
     for (entry = (IP_ENTRY*)List_Head(pLookup->pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
         if ((isIPv6Query && entry->Type == AF_INET6) ||
             (!isIPv6Query && entry->Type == AF_INET)) {
@@ -187,9 +339,31 @@ _FX BOOLEAN WSA_FillResponseStructure(
     }
     neededSize += sockaddrSize;
 
+    // Add BLOB size for HOSTENT structure
+    // NOTE: Windows BLOB format requires relative offsets (not absolute pointers) for relocatable data
+    // HOSTENT structure + converted domain name + h_aliases NULL + h_addr_list entries + final NULL + IP addresses
+    SIZE_T addrSize = isIPv6Query ? 16 : 4;  // IPv6 or IPv4 address size
+    SIZE_T blobSize = sizeof(HOSTENT) + 
+                      (SIZE_T)hostNameBytesNeeded +                    // Narrow string (ANSI)
+                      (sizeof(void*) - 1) +                             // Worst-case padding before h_aliases
+                      sizeof(PCHAR) +                                   // h_aliases NULL terminator
+                      (sizeof(void*) - 1) +                             // Worst-case padding before h_addr_list
+                      (ipCount * sizeof(PCHAR)) + sizeof(PCHAR) +       // h_addr_list array + NULL terminator
+                      (ipCount * addrSize);                             // actual IP addresses
+    
+    // Account for alignment padding before BLOB structure
+    neededSize = (neededSize + (sizeof(void*) - 1)) & ~(sizeof(void*) - 1);
+    neededSize += sizeof(BLOB) + blobSize;
+
+    // Check for overflow (DWORD is 32-bit unsigned)
+    if (neededSize > 0xFFFFFFFF) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     // Buffer not enough, return error
-    if (*lpdwBufferLength < neededSize) {
-        *lpdwBufferLength = neededSize;
+    if (*lpdwBufferLength < (DWORD)neededSize) {
+        *lpdwBufferLength = (DWORD)neededSize;
         SetLastError(WSAEFAULT);
         return FALSE;
     }
@@ -200,20 +374,31 @@ _FX BOOLEAN WSA_FillResponseStructure(
     lpqsResults->dwNameSpace = pLookup->Namespace;
 
     BYTE* currentPtr = (BYTE*)lpqsResults + sizeof(WSAQUERYSETW);
+    
+#ifdef _DEBUG
+    // Debug: set buffer end for bounds checking
+    BYTE* bufferEnd = (BYTE*)lpqsResults + *lpdwBufferLength;
+#endif
 
+    // Copy ServiceInstanceName (wide string)
+    CHECK_BUFFER_SPACE(currentPtr, domainNameLen, bufferEnd);
     lpqsResults->lpszServiceInstanceName = (LPWSTR)currentPtr;
     wcscpy(lpqsResults->lpszServiceInstanceName, pLookup->DomainName);
     currentPtr += domainNameLen;
 
+    // Copy QueryString (wide string)
+    CHECK_BUFFER_SPACE(currentPtr, domainNameLen, bufferEnd);
     lpqsResults->lpszQueryString = (LPWSTR)currentPtr;
     wcscpy(lpqsResults->lpszQueryString, pLookup->DomainName);
     currentPtr += domainNameLen;
 
-    lpqsResults->dwNumberOfCsAddrs = ipCount;
+    // CSADDR_INFO array
+    CHECK_BUFFER_SPACE(currentPtr, csaddrSize, bufferEnd);
+    lpqsResults->dwNumberOfCsAddrs = (DWORD)ipCount;  // Safe: already verified ipCount fits in buffer
     lpqsResults->lpcsaBuffer = (PCSADDR_INFO)currentPtr;
     currentPtr += csaddrSize;
 
-    DWORD i = 0;
+    SIZE_T i = 0;
     for (entry = (IP_ENTRY*)List_Head(pLookup->pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
         if ((isIPv6Query && entry->Type != AF_INET6) ||
             (!isIPv6Query && entry->Type != AF_INET)) {
@@ -223,12 +408,13 @@ _FX BOOLEAN WSA_FillResponseStructure(
         PCSADDR_INFO csaInfo = &lpqsResults->lpcsaBuffer[i++];
 
         if (entry->Type == AF_INET) {
+            CHECK_BUFFER_SPACE(currentPtr, sizeof(SOCKADDR_IN) * 2, bufferEnd);
             SOCKADDR_IN* remoteAddr = (SOCKADDR_IN*)currentPtr;
             currentPtr += sizeof(SOCKADDR_IN);
             memset(remoteAddr, 0, sizeof(SOCKADDR_IN));
 
             remoteAddr->sin_family = AF_INET;
-            remoteAddr->sin_port = 0x3500;
+            remoteAddr->sin_port = 0x3500;  // DNS port 53 in network byte order (big-endian)
             remoteAddr->sin_addr.S_un.S_addr = entry->IP.Data32[3];
 
             csaInfo->RemoteAddr.lpSockaddr = (LPSOCKADDR)remoteAddr;
@@ -250,12 +436,13 @@ _FX BOOLEAN WSA_FillResponseStructure(
             csaInfo->iProtocol = IPPROTO_UDP;
         }
         else if (entry->Type == AF_INET6) {
+            CHECK_BUFFER_SPACE(currentPtr, sizeof(SOCKADDR_IN6_LH) * 2, bufferEnd);
             SOCKADDR_IN6_LH* remoteAddr = (SOCKADDR_IN6_LH*)currentPtr;
             currentPtr += sizeof(SOCKADDR_IN6_LH);
             memset(remoteAddr, 0, sizeof(SOCKADDR_IN6_LH));
 
             remoteAddr->sin6_family = AF_INET6;
-            remoteAddr->sin6_port = 0x3500;
+            remoteAddr->sin6_port = 0x3500;  // DNS port 53 in network byte order (big-endian)
             memcpy(remoteAddr->sin6_addr.u.Byte, entry->IP.Data, 16);
 
             csaInfo->RemoteAddr.lpSockaddr = (LPSOCKADDR)remoteAddr;
@@ -277,6 +464,86 @@ _FX BOOLEAN WSA_FillResponseStructure(
             // magic number returned by Windows
             csaInfo->iProtocol = 23;
         }
+    }
+
+    // Create BLOB with HOSTENT structure
+    // Align currentPtr to pointer boundary before BLOB
+    currentPtr = ALIGN_UP(currentPtr, sizeof(void*));
+    
+    CHECK_BUFFER_SPACE(currentPtr, sizeof(BLOB) + blobSize, bufferEnd);
+    lpqsResults->lpBlob = (LPBLOB)currentPtr;
+    memset(lpqsResults->lpBlob, 0, sizeof(BLOB));  // Zero BLOB structure
+    currentPtr += sizeof(BLOB);
+
+    lpqsResults->lpBlob->cbSize = (DWORD)blobSize;
+    lpqsResults->lpBlob->pBlobData = currentPtr;
+
+    HOSTENT* hostent = (HOSTENT*)currentPtr;
+    memset(hostent, 0, sizeof(HOSTENT));  // Zero HOSTENT structure
+    BYTE* hostentBase = currentPtr;
+    currentPtr += sizeof(HOSTENT);
+
+    // Set address type and length
+    hostent->h_addrtype = isIPv6Query ? AF_INET6 : AF_INET;
+    hostent->h_length = isIPv6Query ? 16 : 4;
+
+    // Set h_name (relative offset - stored as pointer type but contains offset from base)
+    // IMPORTANT: This is a RELATIVE OFFSET, not an absolute pointer
+    hostent->h_name = (char*)(uintptr_t)REL_OFFSET(hostentBase, currentPtr);
+    
+    // Convert WCHAR domain name to narrow ANSI string for HOSTENT
+    int converted = WideCharToMultiByte(CP_ACP, 0, pLookup->DomainName, (int)(domainChars + 1), 
+                                        (LPSTR)currentPtr, hostNameBytesNeeded, NULL, NULL);
+    if (converted <= 0) {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    currentPtr += converted;
+
+    // Align for h_aliases pointer array
+    currentPtr = ALIGN_UP(currentPtr, sizeof(void*));
+    
+    // Set h_aliases (relative offset to NULL-terminated pointer array)
+    hostent->h_aliases = (char**)(uintptr_t)REL_OFFSET(hostentBase, currentPtr);
+    *(PCHAR*)currentPtr = 0;  // NULL terminator
+    currentPtr += sizeof(PCHAR);
+
+    // Align for h_addr_list pointer array
+    currentPtr = ALIGN_UP(currentPtr, sizeof(void*));
+    
+    // Set h_addr_list (relative offset to pointer array)
+    hostent->h_addr_list = (char**)(uintptr_t)REL_OFFSET(hostentBase, currentPtr);
+    PCHAR* addrList = (PCHAR*)currentPtr;
+    currentPtr += (ipCount + 1) * sizeof(PCHAR);  // Array of pointers + NULL terminator
+
+    // Fill IP addresses
+    SIZE_T addrIdx = 0;
+    for (entry = (IP_ENTRY*)List_Head(pLookup->pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((isIPv6Query && entry->Type != AF_INET6) ||
+            (!isIPv6Query && entry->Type != AF_INET)) {
+            continue;
+        }
+
+        // Set address pointer (relative offset from hostentBase - stored as pointer but contains offset)
+        addrList[addrIdx] = (char*)(uintptr_t)REL_OFFSET(hostentBase, currentPtr);
+
+        // Copy IP address
+        if (isIPv6Query) {
+            memcpy(currentPtr, entry->IP.Data, 16);
+            currentPtr += 16;
+        } else {
+            *(DWORD*)currentPtr = entry->IP.Data32[3];
+            currentPtr += 4;
+        }
+        addrIdx++;
+    }
+    addrList[addrIdx] = 0;  // NULL terminator
+
+    // Final sanity check: ensure we didn't overrun the buffer (even in release builds)
+    // This is a lightweight failsafe in case size calculations were wrong
+    if ((BYTE*)currentPtr > ((BYTE*)lpqsResults + *lpdwBufferLength)) {
+        SetLastError(WSAEFAULT);
+        return FALSE;
     }
 
     return TRUE;
@@ -307,7 +574,7 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
         if (!NT_SUCCESS(status))
             break;
 
-        ULONG level = -1;
+        ULONG level = (ULONG)-1;
         WCHAR* value = Config_MatchImageAndGetValue(conf_buf, Dll_ImageName, &level);
         if (!value)
             continue;
@@ -343,15 +610,19 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
             if (!HasV6) {
 
                 //
-                // when there are no IPv6 entries create mapped once from the v4 ips
+                // When there are no IPv6 entries, create IPv4-mapped IPv6 addresses
+                // Format: ::ffff:a.b.c.d (RFC 4291 section 2.5.5.2)
+                // This ensures IPv6 queries can resolve IPv4-only domains
                 //
 
-                for (IP_ENTRY* entry = (IP_ENTRY*)List_Head(entries); entry && entry->Type == AF_INET; entry = (IP_ENTRY*)List_Next(entry)) {
+                for (IP_ENTRY* entry = (IP_ENTRY*)List_Head(entries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+                    if (entry->Type != AF_INET)
+                        continue;
 
                     IP_ENTRY* entry6 = (IP_ENTRY*)Dll_Alloc(sizeof(IP_ENTRY));
                     entry6->Type = AF_INET6;
 
-                    // IPv4 to IPv6 map
+                    // IPv4-mapped IPv6 address: first 80 bits zero, next 16 bits 0xFFFF, then IPv4 address
                     memset(entry6->IP.Data, 0, 10);
                     entry6->IP.Data[10] = 0xFF;
                     entry6->IP.Data[11] = 0xFF;
@@ -374,7 +645,7 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
 
         map_init(&WSA_LookupMap, Dll_Pool);
 
-        SCertInfo CertInfo = { 0 };
+        __declspec(align(8)) SCertInfo CertInfo = { 0 };
         if (!NT_SUCCESS(SbieApi_QueryDrvInfo(-1, &CertInfo, sizeof(CertInfo))) || !(CertInfo.active && CertInfo.opt_net)) {
 
             const WCHAR* strings[] = { L"NetworkDnsFilter" , NULL };
@@ -401,6 +672,37 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
     WSALookupServiceEnd = (P_WSALookupServiceEnd)GetProcAddress(module, "WSALookupServiceEnd");
     if (WSALookupServiceEnd) {
         SBIEDLL_HOOK(WSA_, WSALookupServiceEnd);
+    }
+
+    //
+    // Setup DnsQuery hooks from dnsapi.dll
+    //
+
+    HMODULE dnsapi_module = GetModuleHandleW(L"dnsapi.dll");
+    if (!dnsapi_module) {
+        dnsapi_module = LoadLibraryW(L"dnsapi.dll");
+    }
+
+    if (dnsapi_module) {
+        P_DnsQuery_W DnsQuery_W = (P_DnsQuery_W)GetProcAddress(dnsapi_module, "DnsQuery_W");
+        if (DnsQuery_W) {
+            SBIEDLL_HOOK(WSA_, DnsQuery_W);
+        }
+
+        P_DnsQuery_A DnsQuery_A = (P_DnsQuery_A)GetProcAddress(dnsapi_module, "DnsQuery_A");
+        if (DnsQuery_A) {
+            SBIEDLL_HOOK(WSA_, DnsQuery_A);
+        }
+
+        P_DnsQuery_UTF8 DnsQuery_UTF8 = (P_DnsQuery_UTF8)GetProcAddress(dnsapi_module, "DnsQuery_UTF8");
+        if (DnsQuery_UTF8) {
+            SBIEDLL_HOOK(WSA_, DnsQuery_UTF8);
+        }
+
+        P_DnsQueryEx DnsQueryEx = (P_DnsQueryEx)GetProcAddress(dnsapi_module, "DnsQueryEx");
+        if (DnsQueryEx) {
+            SBIEDLL_HOOK(WSA_, DnsQueryEx);
+        }
     }
 
     // If there are any DnsTrace options set, then output this debug string
@@ -446,7 +748,10 @@ _FX int WSA_WSALookupServiceBeginW(
 
                 pLookup->DomainName = Dll_Alloc((path_len + 1) * sizeof(WCHAR));
                 if (pLookup->DomainName) {
-                    wcscpy(pLookup->DomainName, lpqsRestrictions->lpszServiceInstanceName);
+                    wcscpy_s(pLookup->DomainName, path_len + 1, lpqsRestrictions->lpszServiceInstanceName);
+                }
+                else {
+                    SbieApi_Log(2205, L"NetworkDnsFilter: Failed to allocate domain name");
                 }
 
                 pLookup->Namespace = lpqsRestrictions->dwNameSpace;
@@ -455,6 +760,9 @@ _FX int WSA_WSALookupServiceBeginW(
                     pLookup->ServiceClassId = Dll_Alloc(sizeof(GUID));
                     if (pLookup->ServiceClassId) {
                         memcpy(pLookup->ServiceClassId, lpqsRestrictions->lpServiceClassId, sizeof(GUID));
+                    }
+                    else {
+                        SbieApi_Log(2205, L"NetworkDnsFilter: Failed to allocate service class ID");
                     }
                 }
 
@@ -475,7 +783,7 @@ _FX int WSA_WSALookupServiceBeginW(
                 }
 
                 WCHAR msg[512];
-                Sbie_snwprintf(msg, 512, L"DNS Request Intercepted: %s%s (NS: %d, Type: %s, Hdl: 0x%x) - Using filtered response",
+                Sbie_snwprintf(msg, 512, L"DNS Request Intercepted: %s%s (NS: %d, Type: %s, Hdl: %p) - Using filtered response",
                     lpqsRestrictions->lpszServiceInstanceName, ClsId, lpqsRestrictions->dwNameSpace,
                     WSA_IsIPv6Query(lpqsRestrictions->lpServiceClassId) ? L"IPv6" : L"IPv4", fakeHandle);
                 SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
@@ -501,7 +809,7 @@ _FX int WSA_WSALookupServiceBeginW(
 
         WCHAR msg[512];
         BOOLEAN isIPv6 = WSA_IsIPv6Query(lpqsRestrictions->lpServiceClassId);
-        Sbie_snwprintf(msg, 512, L"DNS Request Begin: %s%s, NS: %d, Type: %s, Hdl: 0x%x, Err: %d)",
+        Sbie_snwprintf(msg, 512, L"DNS Request Begin: %s%s, NS: %d, Type: %s, Hdl: %p, Err: %d)",
             lpqsRestrictions->lpszServiceInstanceName ? lpqsRestrictions->lpszServiceInstanceName : L"Unnamed",
             ClsId, lpqsRestrictions->dwNameSpace, isIPv6 ? L"IPv6" : L"IPv4",
             lphLookup ? *lphLookup : NULL, ret == SOCKET_ERROR ? GetLastError() : 0);
@@ -539,14 +847,15 @@ _FX int WSA_WSALookupServiceNextW(
 
                 if (WSA_DnsTraceFlag) {
                     WCHAR msg[2048];
-                    Sbie_snwprintf(msg, 512, L"DNS Filtered Response: %s (NS: %d, Type: %s, Hdl: 0x%x)",
+                    Sbie_snwprintf(msg, ARRAYSIZE(msg), L"DNS Filtered Response: %s (NS: %d, Type: %s, Hdl: %p)",
                         pLookup->DomainName, lpqsResults->dwNameSpace,
                         WSA_IsIPv6Query(pLookup->ServiceClassId) ? L"IPv6" : L"IPv4", hLookup);
 
                     for (DWORD i = 0; i < lpqsResults->dwNumberOfCsAddrs; i++) {
                         IP_ADDRESS ip;
-                        if (WSA_GetIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr,
-                            lpqsResults->lpcsaBuffer[i].RemoteAddr.iSockaddrLength, &ip))
+                        if (lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr &&
+                            WSA_GetIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr,
+                                lpqsResults->lpcsaBuffer[i].RemoteAddr.iSockaddrLength, &ip))
                             WSA_DumpIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr->sa_family, &ip, msg);
                     }
 
@@ -606,15 +915,23 @@ _FX int WSA_WSALookupServiceNextW(
             HOSTENT* hp = (HOSTENT*)lpqsResults->lpBlob->pBlobData;
             if (hp->h_addrtype == AF_INET6 || hp->h_addrtype == AF_INET) {
 
-                for (PCHAR* Addr = (PCHAR*)(((UINT_PTR)hp->h_addr_list + (UINT_PTR)hp)); *Addr; Addr++) {
+                // Convert relative pointer to absolute using ABS_PTR helper
+                // HOSTENT uses relative offsets (not absolute pointers) in BLOB format
+                // Extract offset from pointer-typed field (stored as offset value, not real pointer)
+                uintptr_t addrListOffset = GET_REL_FROM_PTR(hp->h_addr_list);
+                PCHAR* addrArray = (PCHAR*)ABS_PTR(hp, addrListOffset);
+                
+                for (PCHAR* Addr = addrArray; *Addr; Addr++) {
 
                     for (; entry && entry->Type != hp->h_addrtype; entry = (IP_ENTRY*)List_Next(entry)); // skip to an entry of the right type
-                    if (!entry) { // no more entries clear remaining results
+                    if (!entry) { // no more entries, clear remaining results
                         *Addr = 0;
-                        continue;
+                        break;  // No point continuing - all remaining addresses will be NULL
                     }
 
-                    PCHAR ptr = (PCHAR)(((UINT_PTR)*Addr + (UINT_PTR)hp));
+                    // Convert relative offset to absolute pointer (extract offset, then convert)
+                    uintptr_t ipOffset = GET_REL_FROM_PTR(*Addr);
+                    PCHAR ptr = (PCHAR)ABS_PTR(hp, ipOffset);
                     if (hp->h_addrtype == AF_INET6)
                         memcpy(ptr, entry->IP.Data, 16);
                     else if (hp->h_addrtype == AF_INET)
@@ -630,12 +947,14 @@ _FX int WSA_WSALookupServiceNextW(
 
     if (WSA_DnsTraceFlag && ret == NO_ERROR) {
         WCHAR msg[2048];
-        Sbie_snwprintf(msg, 512, L"DNS Request Found: %s (NS: %d, Hdl: 0x%x)",
+        Sbie_snwprintf(msg, ARRAYSIZE(msg), L"DNS Request Found: %s (NS: %d, Hdl: %p)",
             lpqsResults->lpszServiceInstanceName, lpqsResults->dwNameSpace, hLookup);
 
         for (DWORD i = 0; i < lpqsResults->dwNumberOfCsAddrs; i++) {
             IP_ADDRESS ip;
-            if (WSA_GetIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr, lpqsResults->lpcsaBuffer[i].RemoteAddr.iSockaddrLength, &ip))
+            if (lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr &&
+                WSA_GetIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr, 
+                    lpqsResults->lpcsaBuffer[i].RemoteAddr.iSockaddrLength, &ip))
                 WSA_DumpIP(lpqsResults->lpcsaBuffer[i].RemoteAddr.lpSockaddr->sa_family, &ip, msg);
         }
 
@@ -646,9 +965,16 @@ _FX int WSA_WSALookupServiceNextW(
                 WSA_DumpIP(hp->h_addrtype, NULL, msg);
             }
             else if (hp->h_addr_list) {
-                for (PCHAR* Addr = (PCHAR*)(((UINT_PTR)hp->h_addr_list + (UINT_PTR)hp)); *Addr; Addr++) {
+                // Convert relative pointer to absolute using ABS_PTR helper
+                // Extract offset from pointer-typed field (stored as offset value, not real pointer)
+                uintptr_t addrListOffset = GET_REL_FROM_PTR(hp->h_addr_list);
+                PCHAR* addrArray = (PCHAR*)ABS_PTR(hp, addrListOffset);
+                
+                for (PCHAR* Addr = addrArray; *Addr; Addr++) {
 
-                    PCHAR ptr = (PCHAR)(((UINT_PTR)*Addr + (UINT_PTR)hp));
+                    // Convert relative offset to absolute pointer (extract offset, then convert)
+                    uintptr_t ipOffset = GET_REL_FROM_PTR(*Addr);
+                    PCHAR ptr = (PCHAR)ABS_PTR(hp, ipOffset);
 
                     IP_ADDRESS ip;
                     if (hp->h_addrtype == AF_INET6)
@@ -690,7 +1016,7 @@ _FX int WSA_WSALookupServiceEnd(HANDLE hLookup)
 
             if (WSA_DnsTraceFlag) {
                 WCHAR msg[256];
-                Sbie_snwprintf(msg, 256, L"DNS Filtered Request End (Hdl: 0x%x)", hLookup);
+                Sbie_snwprintf(msg, 256, L"DNS Filtered Request End (Hdl: %p)", hLookup);
                 SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
             }
 
@@ -702,9 +1028,350 @@ _FX int WSA_WSALookupServiceEnd(HANDLE hLookup)
 
     if (WSA_DnsTraceFlag) {
         WCHAR msg[256];
-        Sbie_snwprintf(msg, 256, L"DNS Request End (Hdl: 0x%x)", hLookup);
+        Sbie_snwprintf(msg, 256, L"DNS Request End (Hdl: %p)", hLookup);
         SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
     }
 
     return __sys_WSALookupServiceEnd(hLookup);
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_CheckDnsFilter
+//---------------------------------------------------------------------------
+
+
+_FX BOOLEAN WSA_CheckDnsFilter(const WCHAR* pszName, WORD wType, LIST** ppEntries)
+{
+    if (!WSA_FilterEnabled || !pszName)
+        return FALSE;
+
+    ULONG path_len = wcslen(pszName);
+    WCHAR* path_lwr = (WCHAR*)Dll_AllocTemp((path_len + 4) * sizeof(WCHAR));
+    wmemcpy(path_lwr, pszName, path_len);
+    path_lwr[path_len] = L'\0';
+    _wcslwr(path_lwr);
+
+    PATTERN* found;
+    if (Pattern_MatchPathList(path_lwr, path_len, &WSA_FilterList, NULL, NULL, NULL, &found) > 0) {
+        PVOID* aux = Pattern_Aux(found);
+        // Pattern matched - return TRUE even if no IPs configured
+        // When *aux is NULL, ppEntries will be NULL, causing NXDOMAIN to be returned
+        *ppEntries = *aux ? (LIST*)*aux : NULL;
+        Dll_Free(path_lwr);
+        return TRUE;
+    }
+
+    Dll_Free(path_lwr);
+    return FALSE;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_CreateDnsRecords
+//---------------------------------------------------------------------------
+
+
+_FX PDNS_RECORD WSA_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEntries)
+{
+    if (!pEntries || !pszName)
+        return NULL;
+
+    PDNS_RECORD pFirstRecord = NULL;
+    PDNS_RECORD pLastRecord = NULL;
+
+    // Filter entries by type
+    IP_ENTRY* entry;
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        BOOLEAN match = FALSE;
+        
+        if (wType == DNS_TYPE_A && entry->Type == AF_INET)
+            match = TRUE;
+        else if (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)
+            match = TRUE;
+
+        if (!match)
+            continue;
+
+        // Allocate DNS record
+        PDNS_RECORD pRecord = (PDNS_RECORD)Dll_Alloc(sizeof(DNS_RECORD));
+        if (!pRecord)
+            continue;
+
+        memset(pRecord, 0, sizeof(DNS_RECORD));
+        
+        // Allocate and set name
+        ULONG nameLen = (wcslen(pszName) + 1) * sizeof(WCHAR);
+        pRecord->pName = (PWSTR)Dll_Alloc(nameLen);
+        if (!pRecord->pName) {
+            Dll_Free(pRecord);
+            continue;
+        }
+        wcscpy(pRecord->pName, pszName);
+        
+        pRecord->wType = (entry->Type == AF_INET) ? DNS_TYPE_A : DNS_TYPE_AAAA;
+        pRecord->wDataLength = (entry->Type == AF_INET) ? sizeof(IP4_ADDRESS) : sizeof(IP6_ADDRESS);
+        pRecord->dwTtl = 3600; // 1 hour TTL
+
+        // Set address data
+        if (entry->Type == AF_INET) {
+            pRecord->Data.A.IpAddress = entry->IP.Data32[3];
+        }
+        else if (entry->Type == AF_INET6) {
+            memcpy(&pRecord->Data.AAAA.Ip6Address, entry->IP.Data, 16);
+        }
+
+        // Link records
+        if (!pFirstRecord) {
+            pFirstRecord = pRecord;
+            pLastRecord = pRecord;
+        }
+        else {
+            pLastRecord->pNext = pRecord;
+            pLastRecord = pRecord;
+        }
+    }
+
+    return pFirstRecord;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_DnsQuery_W
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS WSA_DnsQuery_W(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved)
+{
+    LIST* pEntries = NULL;
+    
+    if (WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = WSA_CreateDnsRecords(pszName, wType, pEntries);
+        
+        if (pRecords) {
+            *ppQueryResults = pRecords;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS Query Intercepted: %s (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        // No matching records for this type
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS Query Intercepted: %s (Type: %d) - No matching records", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+        }
+        
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    }
+
+    // Not filtered, call original function
+    DNS_STATUS status = __sys_DnsQuery_W(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    
+    if (WSA_DnsTraceFlag) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS Query: %s (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_DnsQuery_A
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS WSA_DnsQuery_A(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved)
+{
+    // Convert ANSI to Unicode
+    if (!pszName)
+        return __sys_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+
+    int nameLen = MultiByteToWideChar(CP_ACP, 0, pszName, -1, NULL, 0);
+    WCHAR* wszName = (WCHAR*)Dll_AllocTemp(nameLen * sizeof(WCHAR));
+    MultiByteToWideChar(CP_ACP, 0, pszName, -1, wszName, nameLen);
+
+    LIST* pEntries = NULL;
+    
+    if (WSA_CheckDnsFilter(wszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = WSA_CreateDnsRecords(wszName, wType, pEntries);
+        
+        Dll_Free(wszName);
+        
+        if (pRecords) {
+            *ppQueryResults = pRecords;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS Query Intercepted (ANSI): %S (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS Query Intercepted (ANSI): %S (Type: %d) - No matching records", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+        }
+        
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    }
+
+    Dll_Free(wszName);
+
+    // Not filtered, call original function
+    DNS_STATUS status = __sys_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    
+    if (WSA_DnsTraceFlag) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS Query (ANSI): %S (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_DnsQuery_UTF8
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS WSA_DnsQuery_UTF8(
+    PCSTR           pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_RECORD*    ppQueryResults,
+    PVOID*          pReserved)
+{
+    // Convert UTF-8 to Unicode
+    if (!pszName)
+        return __sys_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+
+    int nameLen = MultiByteToWideChar(CP_UTF8, 0, pszName, -1, NULL, 0);
+    WCHAR* wszName = (WCHAR*)Dll_AllocTemp(nameLen * sizeof(WCHAR));
+    MultiByteToWideChar(CP_UTF8, 0, pszName, -1, wszName, nameLen);
+
+    LIST* pEntries = NULL;
+    
+    if (WSA_CheckDnsFilter(wszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = WSA_CreateDnsRecords(wszName, wType, pEntries);
+        
+        Dll_Free(wszName);
+        
+        if (pRecords) {
+            *ppQueryResults = pRecords;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS Query Intercepted (UTF8): %S (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS Query Intercepted (UTF8): %S (Type: %d) - No matching records", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+        }
+        
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    }
+
+    Dll_Free(wszName);
+
+    // Not filtered, call original function
+    DNS_STATUS status = __sys_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    
+    if (WSA_DnsTraceFlag) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS Query (UTF8): %S (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_DnsQueryEx
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS WSA_DnsQueryEx(
+    PDNS_QUERY_REQUEST  pQueryRequest,
+    PDNS_QUERY_RESULT   pQueryResults,
+    PDNS_QUERY_CANCEL   pCancelHandle)
+{
+    if (!pQueryRequest || !pQueryResults)
+        return __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
+
+    LIST* pEntries = NULL;
+    const WCHAR* pszName = pQueryRequest->QueryName;
+    WORD wType = pQueryRequest->QueryType;
+    
+    if (pszName && WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
+        PDNS_RECORD pRecords = WSA_CreateDnsRecords(pszName, wType, pEntries);
+        
+        if (pRecords) {
+            memset(pQueryResults, 0, sizeof(DNS_QUERY_RESULT));
+            pQueryResults->Version = DNS_QUERY_RESULTS_VERSION1;
+            pQueryResults->QueryStatus = ERROR_SUCCESS;
+            pQueryResults->pQueryRecords = pRecords;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS QueryEx Intercepted: %s (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS QueryEx Intercepted: %s (Type: %d) - No matching records", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+        }
+        
+        memset(pQueryResults, 0, sizeof(DNS_QUERY_RESULT));
+        pQueryResults->Version = DNS_QUERY_RESULTS_VERSION1;
+        pQueryResults->QueryStatus = DNS_ERROR_RCODE_NAME_ERROR;
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    }
+
+    // Not filtered, call original function
+    DNS_STATUS status = __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
+    
+    if (WSA_DnsTraceFlag && pszName) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS QueryEx: %s (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
 }
