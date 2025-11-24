@@ -94,6 +94,14 @@ typedef DNS_STATUS (WINAPI *P_DnsQueryEx)(
     PDNS_QUERY_RESULT   pQueryResults,
     PDNS_QUERY_CANCEL   pCancelHandle);
 
+typedef DNS_STATUS (WINAPI *P_DnsQueryRaw)(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_MESSAGE_BUFFER* ppMsgBuf,
+    PVOID*          pReserved);
+
 
 static DNS_STATUS WSA_DnsQuery_W(
     PCWSTR          pszName,
@@ -124,6 +132,14 @@ static DNS_STATUS WSA_DnsQueryEx(
     PDNS_QUERY_RESULT   pQueryResults,
     PDNS_QUERY_CANCEL   pCancelHandle);
 
+static DNS_STATUS WSA_DnsQueryRaw(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_MESSAGE_BUFFER* ppMsgBuf,
+    PVOID*          pReserved);
+
 
 //---------------------------------------------------------------------------
 
@@ -136,6 +152,7 @@ static P_DnsQuery_W __sys_DnsQuery_W = NULL;
 static P_DnsQuery_A __sys_DnsQuery_A = NULL;
 static P_DnsQuery_UTF8 __sys_DnsQuery_UTF8 = NULL;
 static P_DnsQueryEx __sys_DnsQueryEx = NULL;
+static P_DnsQueryRaw __sys_DnsQueryRaw = NULL;
 
 
 //---------------------------------------------------------------------------
@@ -503,6 +520,11 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
         P_DnsQueryEx DnsQueryEx = (P_DnsQueryEx)GetProcAddress(dnsapi_module, "DnsQueryEx");
         if (DnsQueryEx) {
             SBIEDLL_HOOK(WSA_, DnsQueryEx);
+        }
+
+        P_DnsQueryRaw DnsQueryRaw = (P_DnsQueryRaw)GetProcAddress(dnsapi_module, "DnsQueryRaw");
+        if (DnsQueryRaw) {
+            SBIEDLL_HOOK(WSA_, DnsQueryRaw);
         }
     }
 
@@ -1147,6 +1169,58 @@ _FX DNS_STATUS WSA_DnsQueryEx(
     if (WSA_DnsTraceFlag && pszName) {
         WCHAR msg[512];
         Sbie_snwprintf(msg, 512, L"DNS QueryEx: %s (Type: %d, Status: %d)", pszName, wType, status);
+        SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+    }
+    
+    return status;
+}
+
+
+//---------------------------------------------------------------------------
+// WSA_DnsQueryRaw
+//---------------------------------------------------------------------------
+
+
+_FX DNS_STATUS WSA_DnsQueryRaw(
+    PCWSTR          pszName,
+    WORD            wType,
+    DWORD           Options,
+    PVOID           pExtra,
+    PDNS_MESSAGE_BUFFER* ppMsgBuf,
+    PVOID*          pReserved)
+{
+    LIST* pEntries = NULL;
+    
+    if (WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
+        // For DnsQueryRaw, we need to return raw DNS packet data
+        // If filtered with IPs, we would need to construct a raw DNS response packet
+        // If filtered without IPs (blocking), return NXDOMAIN
+        
+        if (!pEntries) {
+            // Domain is blocked (no IPs configured)
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS QueryRaw Intercepted: %s (Type: %d) - Blocked (NXDOMAIN)", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            return DNS_ERROR_RCODE_NAME_ERROR;
+        }
+        
+        // For raw packet mode with configured IPs, we need to construct a DNS message buffer
+        // This is complex - for now, fall through to original function with a trace
+        if (WSA_DnsTraceFlag) {
+            WCHAR msg[512];
+            Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d) - Raw packet filtering not fully implemented, passing through", pszName, wType);
+            SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
+        }
+    }
+
+    // Not filtered or raw packet construction needed - call original function
+    DNS_STATUS status = __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
+    
+    if (WSA_DnsTraceFlag) {
+        WCHAR msg[512];
+        Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d, Status: %d)", pszName, wType, status);
         SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
     }
     
