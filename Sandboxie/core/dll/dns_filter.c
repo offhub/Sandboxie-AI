@@ -1426,7 +1426,7 @@ _FX PDNS_MESSAGE_BUFFER DNSAPI_CreateDnsMessageBuffer(const WCHAR* pszName, WORD
         return NULL;
     
     // Calculate buffer size
-    // DNS Header (12 bytes) + Question section + Answer section
+    // DNS packet: Header (12 bytes) + Question section + Answer section
     DWORD questionSize = dnsNameLen + 4; // name + type (2) + class (2)
     DWORD answerRecordSize = 0;
     
@@ -1438,15 +1438,16 @@ _FX PDNS_MESSAGE_BUFFER DNSAPI_CreateDnsMessageBuffer(const WCHAR* pszName, WORD
         }
     }
     
-    DWORD bufferSize = sizeof(DNS_MESSAGE_BUFFER) + 12 + questionSize + answerRecordSize;
-    PDNS_MESSAGE_BUFFER pMsgBuf = (PDNS_MESSAGE_BUFFER)Dll_Alloc(bufferSize);
+    // Allocate raw buffer for DNS packet (no DNS_MESSAGE_BUFFER header, just raw bytes)
+    DWORD packetSize = 12 + questionSize + answerRecordSize;
+    PDNS_MESSAGE_BUFFER pMsgBuf = (PDNS_MESSAGE_BUFFER)Dll_Alloc(packetSize);
     if (!pMsgBuf)
         return NULL;
     
-    memset(pMsgBuf, 0, bufferSize);
+    memset(pMsgBuf, 0, packetSize);
     
-    // Build DNS header
-    BYTE* pData = (BYTE*)pMsgBuf + sizeof(DNS_MESSAGE_BUFFER);
+    // Build DNS header - start at beginning of buffer
+    BYTE* pData = (BYTE*)pMsgBuf;
     BYTE* pBase = pData;
     
     // Transaction ID (16 bits) - use a simple value
