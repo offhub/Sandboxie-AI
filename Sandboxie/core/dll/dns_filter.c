@@ -1400,6 +1400,179 @@ _FX DNS_STATUS WSA_DnsQueryEx(
 
 
 //---------------------------------------------------------------------------
+// WSA_CreateDnsMessageBuffer
+//---------------------------------------------------------------------------
+
+
+_FX PDNS_MESSAGE_BUFFER WSA_CreateDnsMessageBuffer(const WCHAR* pszName, WORD wType, LIST* pEntries)
+{
+    if (!pEntries || !pszName)
+        return NULL;
+
+    // Convert domain name to DNS wire format (length-prefixed labels)
+    char dnsName[256];
+    int dnsNameLen = 0;
+    
+    // Convert Unicode to ANSI
+    int nameLen = WideCharToMultiByte(CP_ACP, 0, pszName, -1, NULL, 0, NULL, NULL);
+    if (nameLen <= 0 || nameLen > 253)
+        return NULL;
+    
+    char asciiName[256];
+    WideCharToMultiByte(CP_ACP, 0, pszName, -1, asciiName, sizeof(asciiName), NULL, NULL);
+    
+    // Convert to DNS wire format (e.g., "www.example.com" -> "\3www\7example\3com\0")
+    char* src = asciiName;
+    char* dst = dnsName;
+    char* labelStart = dst + 1;
+    *dst = 0;
+    
+    while (*src) {
+        if (*src == '.') {
+            *dst = (char)(labelStart - dst - 1);
+            dst = labelStart;
+            labelStart = dst + 1;
+            *dst = 0;
+        } else {
+            *labelStart++ = *src;
+        }
+        src++;
+    }
+    if (labelStart > dst + 1) {
+        *dst = (char)(labelStart - dst - 1);
+        dst = labelStart;
+    }
+    *dst++ = 0;
+    dnsNameLen = (int)(dst - dnsName);
+    
+    // Count matching IP entries
+    DWORD ipCount = 0;
+    IP_ENTRY* entry;
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            ipCount++;
+        }
+    }
+    
+    if (ipCount == 0)
+        return NULL;
+    
+    // Calculate buffer size
+    // DNS Header (12 bytes) + Question section + Answer section
+    DWORD questionSize = dnsNameLen + 4; // name + type (2) + class (2)
+    DWORD answerRecordSize = 0;
+    
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            // name (pointer: 2 bytes) + type (2) + class (2) + ttl (4) + rdlength (2) + rdata
+            answerRecordSize += 2 + 2 + 2 + 4 + 2 + (entry->Type == AF_INET ? 4 : 16);
+        }
+    }
+    
+    DWORD bufferSize = sizeof(DNS_MESSAGE_BUFFER) + 12 + questionSize + answerRecordSize;
+    PDNS_MESSAGE_BUFFER pMsgBuf = (PDNS_MESSAGE_BUFFER)Dll_Alloc(bufferSize);
+    if (!pMsgBuf)
+        return NULL;
+    
+    memset(pMsgBuf, 0, bufferSize);
+    
+    // Build DNS header
+    BYTE* pData = (BYTE*)pMsgBuf + sizeof(DNS_MESSAGE_BUFFER);
+    BYTE* pBase = pData;
+    
+    // Transaction ID (16 bits) - use a simple value
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // Flags (16 bits): Standard query response, no error
+    // QR=1 (response), Opcode=0 (query), AA=1 (authoritative), TC=0, RD=1, RA=1, Z=0, RCODE=0
+    *pData++ = 0x85; // 10000101
+    *pData++ = 0x80; // 10000000
+    
+    // QDCOUNT (16 bits) - 1 question
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // ANCOUNT (16 bits) - number of answers
+    *pData++ = (BYTE)(ipCount >> 8);
+    *pData++ = (BYTE)(ipCount & 0xFF);
+    
+    // NSCOUNT (16 bits) - 0 authority records
+    *pData++ = 0x00;
+    *pData++ = 0x00;
+    
+    // ARCOUNT (16 bits) - 0 additional records
+    *pData++ = 0x00;
+    *pData++ = 0x00;
+    
+    // Question section
+    memcpy(pData, dnsName, dnsNameLen);
+    pData += dnsNameLen;
+    
+    // QTYPE (16 bits)
+    *pData++ = (BYTE)(wType >> 8);
+    *pData++ = (BYTE)(wType & 0xFF);
+    
+    // QCLASS (16 bits) - IN (Internet)
+    *pData++ = 0x00;
+    *pData++ = 0x01;
+    
+    // Answer section
+    for (entry = (IP_ENTRY*)List_Head(pEntries); entry; entry = (IP_ENTRY*)List_Next(entry)) {
+        if ((wType == DNS_TYPE_A && entry->Type == AF_INET) ||
+            (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)) {
+            
+            // Name (pointer to question name)
+            *pData++ = 0xC0; // Pointer flag
+            *pData++ = 0x0C; // Offset to name in question (after header)
+            
+            // TYPE (16 bits)
+            WORD type = (entry->Type == AF_INET) ? DNS_TYPE_A : DNS_TYPE_AAAA;
+            *pData++ = (BYTE)(type >> 8);
+            *pData++ = (BYTE)(type & 0xFF);
+            
+            // CLASS (16 bits) - IN
+            *pData++ = 0x00;
+            *pData++ = 0x01;
+            
+            // TTL (32 bits) - 3600 seconds
+            *pData++ = 0x00;
+            *pData++ = 0x00;
+            *pData++ = 0x0E;
+            *pData++ = 0x10;
+            
+            // RDLENGTH (16 bits)
+            WORD rdLen = (entry->Type == AF_INET) ? 4 : 16;
+            *pData++ = (BYTE)(rdLen >> 8);
+            *pData++ = (BYTE)(rdLen & 0xFF);
+            
+            // RDATA
+            if (entry->Type == AF_INET) {
+                // IPv4 address (4 bytes)
+                DWORD addr = entry->IP.Data32[3];
+                *pData++ = (BYTE)(addr & 0xFF);
+                *pData++ = (BYTE)((addr >> 8) & 0xFF);
+                *pData++ = (BYTE)((addr >> 16) & 0xFF);
+                *pData++ = (BYTE)((addr >> 24) & 0xFF);
+            } else {
+                // IPv6 address (16 bytes)
+                memcpy(pData, entry->IP.Data, 16);
+                pData += 16;
+            }
+        }
+    }
+    
+    // Set message buffer fields
+    pMsgBuf->MessageHead = *(DNS_HEADER*)pBase;
+    pMsgBuf->MessageLength = (DWORD)(pData - pBase);
+    
+    return pMsgBuf;
+}
+
+
+//---------------------------------------------------------------------------
 // WSA_DnsQueryRaw
 //---------------------------------------------------------------------------
 
@@ -1415,12 +1588,8 @@ _FX DNS_STATUS WSA_DnsQueryRaw(
     LIST* pEntries = NULL;
     
     if (WSA_CheckDnsFilter(pszName, wType, &pEntries)) {
-        // For DnsQueryRaw, we need to return raw DNS packet data
-        // If filtered with IPs, we would need to construct a raw DNS response packet
         // If filtered without IPs (blocking), return NXDOMAIN
-        
         if (!pEntries) {
-            // Domain is blocked (no IPs configured)
             if (WSA_DnsTraceFlag) {
                 WCHAR msg[512];
                 Sbie_snwprintf(msg, 512, L"DNS QueryRaw Intercepted: %s (Type: %d) - Blocked (NXDOMAIN)", pszName, wType);
@@ -1429,16 +1598,30 @@ _FX DNS_STATUS WSA_DnsQueryRaw(
             return DNS_ERROR_RCODE_NAME_ERROR;
         }
         
-        // For raw packet mode with configured IPs, we need to construct a DNS message buffer
-        // This is complex - for now, fall through to original function with a trace
+        // Construct raw DNS response packet with configured IPs
+        PDNS_MESSAGE_BUFFER pMsgBuf = WSA_CreateDnsMessageBuffer(pszName, wType, pEntries);
+        
+        if (pMsgBuf) {
+            *ppMsgBuf = pMsgBuf;
+            
+            if (WSA_DnsTraceFlag) {
+                WCHAR msg[512];
+                Sbie_snwprintf(msg, 512, L"DNS QueryRaw Intercepted: %s (Type: %d) - Using filtered response", pszName, wType);
+                SbieApi_MonitorPutMsg(MONITOR_DNS | MONITOR_DENY, msg);
+            }
+            
+            return ERROR_SUCCESS;
+        }
+        
+        // Failed to construct packet, fall through to original
         if (WSA_DnsTraceFlag) {
             WCHAR msg[512];
-            Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d) - Raw packet filtering not fully implemented, passing through", pszName, wType);
+            Sbie_snwprintf(msg, 512, L"DNS QueryRaw: %s (Type: %d) - Failed to construct packet, passing through", pszName, wType);
             SbieApi_MonitorPutMsg(MONITOR_DNS, msg);
         }
     }
 
-    // Not filtered or raw packet construction needed - call original function
+    // Not filtered or packet construction failed - call original function
     DNS_STATUS status = __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
     
     if (WSA_DnsTraceFlag) {
