@@ -832,11 +832,11 @@ _FX BOOLEAN WSA_CheckDnsFilter(const WCHAR* pszName, WORD wType, LIST** ppEntrie
     PATTERN* found;
     if (Pattern_MatchPathList(path_lwr, path_len, &WSA_FilterList, NULL, NULL, NULL, &found) > 0) {
         PVOID* aux = Pattern_Aux(found);
-        if (*aux) {
-            *ppEntries = (LIST*)*aux;
-            Dll_Free(path_lwr);
-            return TRUE;
-        }
+        // Pattern matched - return TRUE even if no IPs configured
+        // When *aux is NULL, ppEntries will be NULL, causing NXDOMAIN to be returned
+        *ppEntries = *aux ? (LIST*)*aux : NULL;
+        Dll_Free(path_lwr);
+        return TRUE;
     }
 
     Dll_Free(path_lwr);
