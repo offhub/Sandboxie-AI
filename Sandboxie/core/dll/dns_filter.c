@@ -118,11 +118,11 @@ static P_WSALookupServiceBeginW __sys_WSALookupServiceBeginW = NULL;
 static P_WSALookupServiceNextW __sys_WSALookupServiceNextW = NULL;
 static P_WSALookupServiceEnd __sys_WSALookupServiceEnd = NULL;
 
-static P_DnsQuery_W __sys_DNSAPI_DnsQuery_W = NULL;
-static P_DnsQuery_A __sys_DNSAPI_DnsQuery_A = NULL;
-static P_DnsQuery_UTF8 __sys_DNSAPI_DnsQuery_UTF8 = NULL;
-static P_DnsQueryEx __sys_DNSAPI_DnsQueryEx = NULL;
-static P_DnsQueryRaw __sys_DNSAPI_DnsQueryRaw = NULL;
+static P_DnsQuery_W __sys_DnsQuery_W = NULL;
+static P_DnsQuery_A __sys_DnsQuery_A = NULL;
+static P_DnsQuery_UTF8 __sys_DnsQuery_UTF8 = NULL;
+static P_DnsQueryEx __sys_DnsQueryEx = NULL;
+static P_DnsQueryRaw __sys_DnsQueryRaw = NULL;
 
 
 //---------------------------------------------------------------------------
@@ -656,6 +656,10 @@ _FX BOOLEAN WSA_InitNetDnsFilter(HMODULE module)
 
     //
     // Setup DnsQuery hooks from dnsapi.dll
+    // DnsQuery_W/A/UTF8 are available on Windows 2000+ (compatible with Win7/10/11)
+    // DnsQueryEx is available on Windows Vista+ (compatible with Win7/10/11)
+    // DnsQueryRaw availability varies by Windows version, checked via GetProcAddress
+    // All functions use GetProcAddress to ensure compatibility across Windows versions
     //
 
     HMODULE dnsapi_module = GetModuleHandleW(L"dnsapi.dll");
@@ -1162,7 +1166,7 @@ _FX DNS_STATUS DNSAPI_DnsQuery_W(
     }
 
     // Not filtered, call original function
-    DNS_STATUS status = __sys_DNSAPI_DnsQuery_W(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    DNS_STATUS status = __sys_DnsQuery_W(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
     
     if (WSA_DnsTraceFlag) {
         WCHAR msg[512];
@@ -1189,7 +1193,7 @@ _FX DNS_STATUS DNSAPI_DnsQuery_A(
 {
     // Convert ANSI to Unicode
     if (!pszName)
-        return __sys_DNSAPI_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+        return __sys_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
 
     int nameLen = MultiByteToWideChar(CP_ACP, 0, pszName, -1, NULL, 0);
     WCHAR* wszName = (WCHAR*)Dll_AllocTemp(nameLen * sizeof(WCHAR));
@@ -1226,7 +1230,7 @@ _FX DNS_STATUS DNSAPI_DnsQuery_A(
     Dll_Free(wszName);
 
     // Not filtered, call original function
-    DNS_STATUS status = __sys_DNSAPI_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    DNS_STATUS status = __sys_DnsQuery_A(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
     
     if (WSA_DnsTraceFlag) {
         WCHAR msg[512];
@@ -1253,7 +1257,7 @@ _FX DNS_STATUS DNSAPI_DnsQuery_UTF8(
 {
     // Convert UTF-8 to Unicode
     if (!pszName)
-        return __sys_DNSAPI_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+        return __sys_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
 
     int nameLen = MultiByteToWideChar(CP_UTF8, 0, pszName, -1, NULL, 0);
     WCHAR* wszName = (WCHAR*)Dll_AllocTemp(nameLen * sizeof(WCHAR));
@@ -1290,7 +1294,7 @@ _FX DNS_STATUS DNSAPI_DnsQuery_UTF8(
     Dll_Free(wszName);
 
     // Not filtered, call original function
-    DNS_STATUS status = __sys_DNSAPI_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    DNS_STATUS status = __sys_DnsQuery_UTF8(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
     
     if (WSA_DnsTraceFlag) {
         WCHAR msg[512];
@@ -1313,7 +1317,7 @@ _FX DNS_STATUS DNSAPI_DnsQueryEx(
     PDNS_QUERY_CANCEL   pCancelHandle)
 {
     if (!pQueryRequest || !pQueryResults)
-        return __sys_DNSAPI_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
+        return __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
 
     LIST* pEntries = NULL;
     const WCHAR* pszName = pQueryRequest->QueryName;
@@ -1350,7 +1354,7 @@ _FX DNS_STATUS DNSAPI_DnsQueryEx(
     }
 
     // Not filtered, call original function
-    DNS_STATUS status = __sys_DNSAPI_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
+    DNS_STATUS status = __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
     
     if (WSA_DnsTraceFlag && pszName) {
         WCHAR msg[512];
@@ -1584,7 +1588,7 @@ _FX DNS_STATUS DNSAPI_DnsQueryRaw(
     }
 
     // Not filtered or packet construction failed - call original function
-    DNS_STATUS status = __sys_DNSAPI_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
+    DNS_STATUS status = __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
     
     if (WSA_DnsTraceFlag) {
         WCHAR msg[512];
