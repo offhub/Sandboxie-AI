@@ -866,25 +866,24 @@ _FX PDNS_RECORD WSA_CreateDnsRecords(const WCHAR* pszName, WORD wType, LIST* pEn
             match = TRUE;
         else if (wType == DNS_TYPE_AAAA && entry->Type == AF_INET6)
             match = TRUE;
-        else if (wType == 0) // Any type
-            match = TRUE;
 
         if (!match)
             continue;
 
-        // Calculate record size
-        ULONG nameLen = (wcslen(pszName) + 1) * sizeof(WCHAR);
-        ULONG recordSize = sizeof(DNS_RECORD) + nameLen;
-        
-        PDNS_RECORD pRecord = (PDNS_RECORD)Dll_Alloc(recordSize);
+        // Allocate DNS record
+        PDNS_RECORD pRecord = (PDNS_RECORD)Dll_Alloc(sizeof(DNS_RECORD));
         if (!pRecord)
             continue;
 
-        memset(pRecord, 0, recordSize);
+        memset(pRecord, 0, sizeof(DNS_RECORD));
         
-        // Set common fields
-        pRecord->pName = (PWSTR)((BYTE*)pRecord + sizeof(DNS_RECORD));
-        wcscpy(pRecord->pName, pszName);
+        // Allocate and set name
+        ULONG nameLen = (wcslen(pszName) + 1) * sizeof(WCHAR);
+        pRecord->pName = (PWSTR)Dll_Alloc(nameLen);
+        if (pRecord->pName) {
+            wcscpy(pRecord->pName, pszName);
+        }
+        
         pRecord->wType = (entry->Type == AF_INET) ? DNS_TYPE_A : DNS_TYPE_AAAA;
         pRecord->wDataLength = (entry->Type == AF_INET) ? sizeof(IP4_ADDRESS) : sizeof(IP6_ADDRESS);
         pRecord->dwTtl = 3600; // 1 hour TTL
