@@ -1138,6 +1138,10 @@ _FX DNS_STATUS DNSAPI_DnsQuery_W(
     PDNS_RECORD*    ppQueryResults,
     PVOID*          pReserved)
 {
+    // Validate parameters before processing
+    if (!pszName || !ppQueryResults)
+        return __sys_DnsQuery_W(pszName, wType, Options, pExtra, ppQueryResults, pReserved);
+    
     LIST* pEntries = NULL;
     
     if (DNS_CheckFilter(pszName, wType, &pEntries)) {
@@ -1316,6 +1320,7 @@ _FX DNS_STATUS DNSAPI_DnsQueryEx(
     PDNS_QUERY_RESULT   pQueryResults,
     PDNS_QUERY_CANCEL   pCancelHandle)
 {
+    // Validate parameters before processing
     if (!pQueryRequest || !pQueryResults)
         return __sys_DnsQueryEx(pQueryRequest, pQueryResults, pCancelHandle);
 
@@ -1552,6 +1557,10 @@ _FX DNS_STATUS DNSAPI_DnsQueryRaw(
     PDNS_MESSAGE_BUFFER* ppMsgBuf,
     PVOID*          pReserved)
 {
+    // Validate parameters before processing
+    if (!pszName || !ppMsgBuf)
+        return __sys_DnsQueryRaw(pszName, wType, Options, pExtra, ppMsgBuf, pReserved);
+    
     LIST* pEntries = NULL;
     
     if (DNS_CheckFilter(pszName, wType, &pEntries)) {
