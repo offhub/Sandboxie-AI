@@ -242,6 +242,8 @@ static int WSA_WSARecvFrom(
 
 static int WSA_closesocket(SOCKET s);
 
+static int WSA_IsLocalLoop(const short* addr, int addrlen);
+
 
 BOOLEAN socks5_handshake(SOCKET s, BOOLEAN auth, WCHAR login[256], WCHAR pass[256]);
 
@@ -1081,6 +1083,13 @@ _FX void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr)
 //---------------------------------------------------------------------------
 // WSA_IsLocalLoop
 //---------------------------------------------------------------------------
+static _FX ULONG WSA_htonl(ULONG x) {
+	return ((x & 0x000000FF) << 24) |
+		((x & 0x0000FF00) << 8) |
+		((x & 0x00FF0000) >> 8) |
+		((x & 0xFF000000) >> 24);
+}
+
 _FX int WSA_IsLocalLoop(const short* addr, int addrlen) {
 	if (!WSA_isBlockLocalLoop || !addr || addrlen < sizeof(USHORT) * 2)
 		return 0;
@@ -1092,7 +1101,7 @@ _FX int WSA_IsLocalLoop(const short* addr, int addrlen) {
 	// ÅÐ¶ÏÊÇ·ñÎª IPv4-mapped IPv6 µÄ 127.x.x.x
 	if (ip.Data32[0] == 0 &&
 		ip.Data32[1] == 0 &&
-		ip.Data32[2] == _htonl(0xFFFF) &&
+		ip.Data32[2] == WSA_htonl(0xFFFF) &&
 		(ip.Data[12] == 127)) {
 		return 1;
 	}
