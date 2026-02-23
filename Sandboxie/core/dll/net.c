@@ -382,6 +382,8 @@ typedef struct _WSA_SOCK {
 
 static HASH_MAP   WSA_SockMap;
 
+BOOLEAN WSA_isBlockLocalLoop = FALSE;
+
 //---------------------------------------------------------------------------
 // Debug helpers (controlled by NetFwTrace setting)
 //---------------------------------------------------------------------------
@@ -454,7 +456,7 @@ _FX int WSA_WSAStartup(
 
         WSA_BindIP = TRUE;
     }
-
+	WSA_isBlockLocalLoop = SbieApi_QueryConfBool(NULL, L"BlockLocalLoop", FALSE);
     //
     // Init helper map if needed
     //
@@ -1084,7 +1086,7 @@ _FX void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr)
 
 _FX int WSA_IsBlockedTraffic(const short *addr, int addrlen, int protocol)
 {
-	if (SbieApi_QueryConfBool(NULL, L"BlockLocalLoop", FALSE)) {
+	if (WSA_isBlockLocalLoop) {
 
 		if (addr && addrlen >= sizeof(USHORT)) {
 
