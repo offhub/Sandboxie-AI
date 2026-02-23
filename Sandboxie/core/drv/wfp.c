@@ -710,7 +710,7 @@ BOOLEAN WFP_UpdateProcess(PROCESS* proc)
 			BlockInternet = TRUE; // on roule failure we lust block everything
 			// todo: log error
 		}
-		BlockLoopback = Process_GetConf_bool(proc, L"BlockLoopback", FALSE);
+		BlockLoopback = Process_GetConf_bool(proc, L"BlockLocalLoop", FALSE);
 	}
 
 #ifdef _WIN64
