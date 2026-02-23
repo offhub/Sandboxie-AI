@@ -1100,8 +1100,8 @@ _FX int WSA_IsBlockedTraffic(const short *addr, int addrlen, int protocol)
 			}
 
 			// IPv6 loopback: ::1
-			if (addr[0] == AF_INET6 && addrlen >= sizeof(SOCKADDR_IN6)) {
-				const SOCKADDR_IN6* a6 = (const SOCKADDR_IN6*)addr;
+			if (addr[0] == AF_INET6 && addrlen >= sizeof(SOCKADDR_IN6_LH)) {
+				const SOCKADDR_IN6_LH* a6 = (const SOCKADDR_IN6_LH*)addr;
 
 				static const BYTE loop6[16] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 };
 				if (memcmp(a6->sin6_addr.u.Byte, loop6, 16) == 0) {
