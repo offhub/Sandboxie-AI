@@ -64,6 +64,8 @@ void COptionsWindow::CreateNetwork()
 	connect(ui.chkBlockNetShare, SIGNAL(clicked(bool)), this, SLOT(OnNetworkChanged()));
 	connect(ui.chkBlockNetParam, SIGNAL(clicked(bool)), this, SLOT(OnNetworkChanged()));
 
+	connect(ui.chkBlockLoop, SIGNAL(clicked(bool)), this, SLOT(OnNetworkChanged()));
+
 	connect(ui.cmbNIC, SIGNAL(currentIndexChanged(int)), this, SLOT(OnAdapterChanged()));
 
 	connect(ui.txtIPv4, SIGNAL(textChanged(const QString&)), this, SLOT(OnNetworkChanged()));
@@ -139,6 +141,8 @@ void COptionsWindow::SaveNetwork()
 	
 	WriteAdvancedCheck(ui.chkBlockNetShare, "BlockNetworkFiles", "y", "");
 	WriteAdvancedCheck(ui.chkBlockNetParam, "BlockNetParam", "", "n");
+
+	WriteAdvancedCheck(ui.chkBlockLoop, "BlockLocalLoop", "y", "");
 
 	QStringList BindNICs = m_pBox->GetTextList("BindAdapter", false);
 	foreach(const QString& BindNIC, BindNICs) {
@@ -289,7 +293,8 @@ void COptionsWindow::LoadBlockINet()
 	//ui.chkINetBlockMsg->setEnabled(ui.chkBlockINet->isChecked());
 	ui.chkINetBlockMsg->setEnabled(ui.cmbBlockINet->currentIndex() != 0);
 	ui.chkINetBlockMsg->setChecked(m_pBox->GetBool("NotifyInternetAccessDenied", true));
-	
+
+	ui.chkBlockLoop->setChecked(m_pBox->GetBool("BlockLocalLoop", false));
 
 	ui.treeINet->clear();
 	for (int i = 0; i < ui.treeGroups->topLevelItemCount(); i++) 
