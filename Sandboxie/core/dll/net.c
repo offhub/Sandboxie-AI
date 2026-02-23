@@ -1084,6 +1084,33 @@ _FX void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr)
 
 _FX int WSA_IsBlockedTraffic(const short *addr, int addrlen, int protocol)
 {
+	if (SbieApi_QueryConfBool(NULL, L"BlockLocalLoop", FALSE)) {
+
+		if (addr && addrlen >= sizeof(USHORT)) {
+
+			// IPv4 loopback: 127.0.0.0/8
+			if (addr[0] == AF_INET && addrlen >= sizeof(SOCKADDR_IN)) {
+				const SOCKADDR_IN* a4 = (const SOCKADDR_IN*)addr;
+				UINT32 ip = _ntohl(a4->sin_addr.S_un.S_addr);
+
+				if ((ip & 0xFF000000) == 0x7F000000) {   // 127.x.x.x
+					SetLastError(WSAECONNREFUSED);
+					return 1;
+				}
+			}
+
+			// IPv6 loopback: ::1
+			if (addr[0] == AF_INET6 && addrlen >= sizeof(SOCKADDR_IN6)) {
+				const SOCKADDR_IN6* a6 = (const SOCKADDR_IN6*)addr;
+
+				static const BYTE loop6[16] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 };
+				if (memcmp(a6->sin6_addr.u.Byte, loop6, 16) == 0) {
+					SetLastError(WSAECONNREFUSED);
+					return 1;
+				}
+			}
+		}
+	}
 
     if (WSA_FwList.count > 0 && addrlen >= sizeof(USHORT) * 2 && addr && (addr[0] == AF_INET || addr[0] == AF_INET6)) {
 
