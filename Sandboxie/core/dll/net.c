@@ -1078,6 +1078,34 @@ _FX void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr)
         Sbie_snwprintf(pStr, 5 + 10, L"; %d: ???", af);
 }
 
+//---------------------------------------------------------------------------
+// WSA_IsLocalLoop
+//---------------------------------------------------------------------------
+_FX int WSA_IsLocalLoop(const short* addr, int addrlen) {
+	if (!WSA_isBlockLocalLoop || !addr || addrlen < sizeof(USHORT) * 2)
+		return 0;
+
+	IP_ADDRESS ip;
+	if (!WSA_GetIP(addr, addrlen, &ip))
+		return 0;
+
+	// 判断是否为 IPv4-mapped IPv6 的 127.x.x.x
+	if (ip.Data32[0] == 0 &&
+		ip.Data32[1] == 0 &&
+		ip.Data32[2] == _htonl(0xFFFF) &&
+		(ip.Data[12] == 127)) {
+		return 1;
+	}
+
+	// 判断是否为 IPv6 回环地址 ::1
+	static const BYTE loop6[16] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 };
+	if (memcmp(ip.Data, loop6, 16) == 0) {
+		return 1;
+	}
+
+	return 0;
+}
+
 
 //---------------------------------------------------------------------------
 // WSA_IsBlockedTraffic
@@ -1086,34 +1114,10 @@ _FX void WSA_DumpIP(ADDRESS_FAMILY af, IP_ADDRESS* pIP, wchar_t* pStr)
 
 _FX int WSA_IsBlockedTraffic(const short *addr, int addrlen, int protocol)
 {
-	if (WSA_isBlockLocalLoop) {
-
-		if (addr && addrlen >= sizeof(USHORT)) {
-
-			// IPv4 loopback: 127.0.0.0/8
-			if (addr[0] == AF_INET && addrlen >= sizeof(SOCKADDR_IN)) {
-				const SOCKADDR_IN* a4 = (const SOCKADDR_IN*)addr;
-				UINT32 ip = _ntohl(a4->sin_addr.S_un.S_addr);
-
-				if ((ip & 0xFF000000) == 0x7F000000) {   // 127.x.x.x
-					SetLastError(WSAECONNREFUSED);
-					return 1;
-				}
-			}
-
-			// IPv6 loopback: ::1
-			if (addr[0] == AF_INET6 && addrlen >= sizeof(SOCKADDR_IN6_LH)) {
-				const SOCKADDR_IN6_LH* a6 = (const SOCKADDR_IN6_LH*)addr;
-
-				static const BYTE loop6[16] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1 };
-				if (memcmp(a6->sin6_addr.u.Byte, loop6, 16) == 0) {
-					SetLastError(WSAECONNREFUSED);
-					return 1;
-				}
-			}
-		}
+	if (WSA_isBlockLocalLoop && WSA_IsLocalLoop(addr, addrlen)) {
+		SetLastError(WSAECONNREFUSED);
+		return 1;
 	}
-
     if (WSA_FwList.count > 0 && addrlen >= sizeof(USHORT) * 2 && addr && (addr[0] == AF_INET || addr[0] == AF_INET6)) {
 
         USHORT port = _ntohs(addr[1]);
@@ -1320,6 +1324,9 @@ _FX int WSA_connect(
 {
     if (WSA_IsBlockedTraffic(name, namelen, IPPROTO_TCP))
         return SOCKET_ERROR;
+	if (WSA_isBlockLocalLoop && WSA_IsLocalLoop(name, namelen)) {
+		 return SOCKET_ERROR;
+	}
 
     // If BindIP is configured, try to bind the socket to the configured adapter
     // When StrictBindIP=n, we allow connections even if adapter is unavailable
